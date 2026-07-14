@@ -1,0 +1,53 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js build output
+/.next/
+/out/
+
+# Production
+/build
+
+# VSCode settings
+.vscode/
+
+# MAC
+.DS_Store
+
+# Misc
+.npm
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# PM2
+logs/
+.pm2/
+
+# Firebase
+.firebase/
+firebase-debug.log*
+*.tsbuildinfo
+
+# Env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Client document uploads
+/uploads/
+
+# Firebase service account (never commit)
+*-firebase-adminsdk-*.json
+firebase-service-account.json

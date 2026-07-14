@@ -1,0 +1,474 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  Int                  @id @default(autoincrement())
+  traccarId           Int?                 @unique
+  name                String
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  balance             Decimal              @default(0.00) @db.Decimal(10, 2)
+  email               String?
+  phone               String?              @unique
+  status              String               @default("active")
+  pin                 String?
+  cnic                String?              @unique
+  cnicFrontPath       String?
+  cnicBackPath        String?
+  alerts              AlertLog[]
+  recharges           Recharge[]
+  registrationNumbers RegistrationNumber[]
+  transactions        Transaction[]
+  devices             WalletDevice[]
+
+  @@map("users")
+}
+
+model RegistrationNumber {
+  id        Int      @id @default(autoincrement())
+  number    String   @unique
+  userId    Int
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("registration_numbers")
+}
+
+model WalletDevice {
+  id                     Int                @id @default(autoincrement())
+  userId                 Int
+  traccarDeviceId        Int                @unique
+  name                   String
+  planType               String
+  planPrice              Decimal            @db.Decimal(10, 2)
+  dailyCost              Decimal            @db.Decimal(10, 4)
+  billingStartDate       DateTime
+  nextBillingDate        DateTime
+  lastChargedAt          DateTime?
+  status                 String             @default("active")
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  offlineHoursConcession Int                @default(0)
+  commands               DeviceCommandLog[]
+  transactions           Transaction[]
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("wallet_devices")
+}
+
+model Device {
+  id         Int       @id
+  name       String
+  uniqueId   String    @unique
+  status     String
+  lastUpdate DateTime?
+  positionId Int?
+  attributes String?   @db.Text
+  userId     Int?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("devices")
+}
+
+model Transaction {
+  id           Int           @id @default(autoincrement())
+  userId       Int
+  deviceId     Int?
+  type         String
+  amount       Decimal       @db.Decimal(10, 2)
+  balanceAfter Decimal       @db.Decimal(10, 2)
+  description  String
+  createdAt    DateTime      @default(now())
+  device       WalletDevice? @relation(fields: [deviceId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
+
+  @@index([deviceId])
+  @@index([userId])
+  @@map("transactions")
+}
+
+model Recharge {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  amount    Decimal  @db.Decimal(10, 2)
+  method    String
+  reference String?
+  status    String   @default("completed")
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("recharges")
+}
+
+model DeviceCommandLog {
+  id        Int          @id @default(autoincrement())
+  deviceId  Int
+  command   String
+  status    String
+  response  String?      @db.Text
+  createdAt DateTime     @default(now())
+  device    WalletDevice @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+  @@map("device_commands_logs")
+}
+
+model CommandLog {
+  id        Int      @id @default(autoincrement())
+  deviceId  Int
+  command   String
+  status    String
+  response  String?
+  createdAt DateTime @default(now())
+
+  @@map("command_logs")
+}
+
+model AlertLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  type      String
+  message   String   @db.Text
+  sentVia   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("alerts_log")
+}
+
+model Invoice {
+  id                 String    @id @default(uuid())
+  deviceIds          String    @db.Text
+  customerIdentifier String
+  customerName       String
+  totalAmount        Float
+  baseAmount         Float
+  periodStart        DateTime
+  periodEnd          DateTime
+  status             String    @default("pending")
+  paidAt             DateTime?
+  paidBy             String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  notes              String?   @db.Text
+  extensionDays      Int?
+  extensionGrantedAt DateTime?
+  autoCallDate       DateTime?
+  autoCallMade       Boolean   @default(false)
+  discount           Float     @default(0)
+  dueDate            DateTime?
+  durationType       String?
+  expiryDate         DateTime?
+  lastCallDate       DateTime?
+  lastCallPromptId   String?
+  lastCallStatus     String?
+  otherCharges       Float     @default(0)
+  previousDues       Float     @default(0)
+  requiresReview     Boolean   @default(false)
+  simCharges         Float     @default(0)
+  subscriptionType   String?
+
+  @@map("invoices")
+}
+
+model UserSession {
+  id               Int      @id @default(autoincrement())
+  phoneNumber      String   @unique
+  lastCommand      String?
+  lastAction       String?
+  selectedDeviceId Int?
+  updatedAt        DateTime @updatedAt
+  assignedTo       String?
+  isAssigned       Boolean  @default(false)
+  sessionStatus    String   @default("bot")
+
+  @@map("user_sessions")
+}
+
+model WebhookLog {
+  id        Int      @id @default(autoincrement())
+  type      String   @default("incoming")
+  from      String
+  to        String?
+  body      String
+  payload   String?  @db.Text
+  createdAt DateTime @default(now())
+  messageId String?  @unique
+  status    String?
+
+  @@map("webhook_logs")
+}
+
+model Sale {
+  id                   String    @id @default(uuid())
+  customerName         String
+  amount               Decimal   @db.Decimal(10, 2)
+  devicePrice          Decimal?  @db.Decimal(10, 2)
+  currentPeriodCharges Decimal?  @db.Decimal(10, 2)
+  date                 DateTime  @default(now())
+  vehicleNumber        String
+  monthId              String?
+  notes                String?   @db.Text
+  relatedInvoiceId     String?
+  createdBy            String
+  createdAt            DateTime  @default(now())
+  dealerId             String?
+  commission           Decimal?  @db.Decimal(10, 2)
+  trackerId            String?
+  imei                 String?
+  harnessId            String?
+  relayId              String?
+  micId                String?
+  sosButtonId          String?
+  simId                String?
+  simNumber            String?
+  imsi                 String?
+  phoneRobocall        String?
+  contactNumber        String?
+  notificationIds      String?   @db.Text
+  status               String    @default("active")
+  unsubscribedAt       DateTime?
+  unsubscribeReason    String?   @db.Text
+  renewalFee           Decimal?  @db.Decimal(10, 2)
+  simCharges           Decimal?  @db.Decimal(10, 2)
+  discount             Decimal?  @db.Decimal(10, 2)
+  vehicleCardPath      String?
+
+  @@map("sales")
+}
+
+model Expense {
+  id                 String    @id @default(uuid())
+  inventoryItemId    String?
+  title              String
+  amount             Decimal   @db.Decimal(10, 2)
+  type               String
+  date               DateTime  @default(now())
+  status             String    @default("pending")
+  monthId            String?
+  notes              String?   @db.Text
+  createdBy          String
+  createdAt          DateTime  @default(now())
+  approvedBy         String?
+  approvedAt         DateTime?
+  isRecurring        Boolean   @default(false)
+  recurringFrequency String?
+  personId           String?
+  dealerId           String?
+  transactionType    String?
+
+  @@map("expenses")
+}
+
+model InventoryItem {
+  id          String   @id @default(uuid())
+  name        String
+  type        String
+  quantity    Int      @default(0)
+  cost        Decimal? @db.Decimal(10, 2)
+  supplier    String?
+  lastUpdated DateTime @default(now())
+  imeis       String?  @db.Text
+  sims        String?  @db.Text
+
+  @@map("inventory")
+}
+
+model Dealer {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String
+  address   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@map("dealers")
+}
+
+model StockAllocation {
+  id              String   @id @default(uuid())
+  inventoryItemId String
+  dealerId        String
+  quantity        Int
+  allocatedImeis  String?  @db.Text
+  allocatedSims   String?  @db.Text
+  allocatedAt     DateTime @default(now())
+  allocatedBy     String
+
+  @@map("stock_allocations")
+}
+
+model Person {
+  id        String        @id @default(uuid())
+  name      String
+  phone     String
+  type      String
+  cnic      String?
+  status    String        @default("active")
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  ledgers   LedgerEntry[]
+
+  @@map("persons")
+}
+
+model LedgerEntry {
+  id            String   @id @default(uuid())
+  personId      String
+  date          DateTime @default(now())
+  type          String
+  description   String   @db.Text
+  paymentMethod String
+  amount        Decimal  @db.Decimal(10, 2)
+  addedBy       String
+  attachmentUrl String?
+  person        Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId])
+  @@map("ledger_entries")
+}
+
+model CompanyVehicle {
+  id              String   @id @default(uuid())
+  customerName    String
+  date            DateTime @default(now())
+  vehicleNumber   String
+  monthId         String?
+  notes           String?  @db.Text
+  createdBy       String
+  createdAt       DateTime @default(now())
+  dealerId        String?
+  trackerId       String?
+  imei            String?
+  harnessId       String?
+  relayId         String?
+  micId           String?
+  sosButtonId     String?
+  simId           String?
+  simNumber       String?
+  imsi            String?
+  phoneRobocall   String?
+  contactNumber   String?
+  notificationIds String?  @db.Text
+  vehicleCardPath String?
+
+  @@map("company_vehicles")
+}
+
+model Log {
+  id        String   @id @default(uuid())
+  action    String   @db.Text
+  adminName String
+  type      String
+  createdAt DateTime @default(now())
+
+  @@map("logs")
+}
+
+model ApprovalRequest {
+  id                String    @id
+  actionType        String
+  targetId          String
+  payload           String    @db.Text
+  status            String    @default("pending")
+  requestedBy       String    @db.Text
+  approvals         String    @db.Text
+  rejections        String?   @db.Text
+  requiredApprovals Int       @default(1)
+  createdAt         DateTime  @default(now())
+  resolvedAt        DateTime?
+  resolvedBy        String?
+
+  @@map("approval_requests")
+}
+
+model CustomCommand {
+  id        String   @id
+  name      String
+  command   String
+  createdAt DateTime @default(now())
+
+  @@map("custom_commands")
+}
+
+model Office {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  @@map("offices")
+}
+
+model Employee {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String
+  createdAt DateTime @default(now())
+
+  @@map("employees")
+}
+
+model AppSetting {
+  id                     String   @id @default("main")
+  theme                  String   @default("light")
+  invoiceDaysMonthly     Int      @default(3)
+  invoiceDaysYearly      Int      @default(7)
+  simCostPerDevice       Int      @default(150)
+  monthlyYearlyThreshold Int      @default(2000)
+  soundEvents            String?  @db.Text
+  soundAlarms            String?  @db.Text
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  whatsappInstanceId     String?  @db.Text
+  whatsappToken          String?  @db.Text
+
+  @@map("app_settings")
+}
+
+model DeviceRemark {
+  id           String    @id @default(uuid())
+  deviceId     Int
+  remarks      String    @db.Text
+  lastCallDate DateTime?
+  addedBy      String
+  createdAt    DateTime  @default(now())
+
+  @@map("device_remarks")
+}
+
+model UserPin {
+  userId String @id
+  pin    String
+
+  @@map("user_pins")
+}
+
+model InvoiceItem {
+  id           String   @id @default(uuid())
+  invoiceId    String
+  deviceId     Int
+  deviceName   String
+  deviceImei   String
+  description  String
+  baseAmount   Float?
+  simCharges   Float?
+  otherCharges Float?
+  discount     Float?
+  totalAmount  Float
+  periodStart  DateTime?
+  periodEnd    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}

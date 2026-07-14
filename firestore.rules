@@ -1,0 +1,319 @@
+/**
+ * @fileoverview Firestore Security Rules for the Trackerman application.
+ *
+ * Core Philosophy:
+ * This ruleset prioritizes security and data ownership, enforcing strict
+ * access control based on user authentication and explicit authorization.
+ * It uses a flexible data model, but assumes that all write operations
+ * are potentially sensitive and must be carefully validated.
+ *
+ * Data Structure:
+ * The Firestore database is organized into a flat collection structure.
+ * Most collections are top-level. Subcollections are used only for
+ * person-specific ledger entries (now deprecated).
+ *
+ * Key Security Decisions:
+ * - User listing is generally disallowed.
+ * - Read-only access is granted to certain collections where appropriate.
+ * - All write operations require authentication (`request.auth != null`)
+ *   and explicit authorization checks.
+ *
+ * Denormalization for Authorization:
+ * To avoid costly `get()` operations in the rules, the data model should be
+ * structured to include all necessary authorization information directly
+ * within the documents being secured. This can involve duplicating user IDs
+ * or role assignments within the documents themselves.
+ *
+ * Example: Instead of storing project membership in a separate `/memberships`
+ * collection, include a `members` map directly within the `/projects/{projectId}`
+ * document (e.g., `{ members: { 'user_abc': 'editor' } }`). This allows for
+ * simple and efficient rules like `resource.data.members[request.auth.uid] == 'editor'`.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /**
+     * @description Secures user PINs, allowing only the user to read or write their own PIN.
+     * @path /userPins/{userId}
+     * @allow (get, create, update, delete) - User 'user1@example.com' can access their own PIN.
+     * @deny (get, create, update, delete) - User 'user2@example.com' cannot access 'user1@example.com' PIN.
+     * @principle Enforces user-ownership.
+     */
+    match /userPins/{userId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      function isOwner(userId) {
+        return isSignedIn() && request.auth.uid == userId;
+      }
+      function isExistingOwner(userId) {
+        return isOwner(userId) && resource != null;
+      }
+
+      allow get: if isOwner(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) && request.resource.data.userId == userId;
+      allow update: if isExistingOwner(userId) && request.resource.data.userId == userId;
+      allow delete: if isExistingOwner(userId);
+    }
+
+    /**
+     * @description Secures the global application settings, allowing only authenticated users to read.
+     * @path /appSettings/main
+     * @allow (get, list) - Any authenticated user can read app settings.
+     * @deny (create, update, delete) - No user can create, update, or delete app settings.
+     * @principle Restricts write access to a single document.
+     */
+    match /appSettings/main {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    /**
+     * @description Secures dealer information, allowing only authenticated users to read, create, update, and delete.
+     * @path /dealers/{dealerId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on dealer information.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /dealers/{dealerId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures stock allocation records, allowing only authenticated users to read, create, update, and delete.
+     * @path /stockAllocations/{allocationId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on stock allocation records.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /stockAllocations/{allocationId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures invoice records, allowing only authenticated users to read, create, update, and delete.
+     * @path /invoices/{invoiceId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on invoice records.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /invoices/{invoiceId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+
+      // Allow anyone to list invoices for the verification system.
+      allow list: if true;
+
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures invoice items, allowing only authenticated users to read, create, update, and delete.
+     * @path /invoiceItems/{itemId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on invoice items.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /invoiceItems/{itemId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures expense records, allowing only authenticated users to read, create, update, and delete.
+     * @path /expenses/{expenseId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on expense records.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /expenses/{expenseId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures sale records, allowing only authenticated users to read, create, update, and delete.
+     * @path /sales/{saleId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on sale records.
+     *  Also supports public read for verification.
+     * @deny N/A
+     */
+    match /sales/{saleId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if true;
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+      /**
+       * @description Secures company vehicle installations, allowing only authenticated users to read, create, update, and delete.
+       * @path /companyVehicles/{vehicleId}
+       * @allow (get, create, update, delete) - Any authenticated user can perform operations on company vehicle installations.
+       * @deny N/A
+       * @principle Requires authentication for all operations.
+       */
+      match /companyVehicles/{vehicleId} {
+        function isSignedIn() {
+          return request.auth != null;
+        }
+        allow get: if isSignedIn();
+        allow list: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update: if isSignedIn() && resource != null;
+        allow delete: if isSignedIn() && resource != null;
+      }
+
+    /**
+     * @description Secures audit log records, allowing only authenticated users to read, create, update, and delete.
+     * @path /logs/{logId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on log records.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /logs/{logId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures inventory items, allowing only authenticated users to read, create, update, and delete.
+     * @path /inventory/{itemId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on inventory items.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /inventory/{itemId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+     /**
+      * @description Secures approval requests, allowing only authenticated users to read, create, update, and delete.
+      * @path /approvalRequests/{requestId}
+      * @allow (get, create, update, delete) - Any authenticated user can perform operations on approval requests.
+      * @deny N/A
+      * @principle Requires authentication for all operations.
+      */
+    match /approvalRequests/{requestId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures custom commands, allowing only authenticated users to read, create, update, and delete.
+     * @path /customCommands/{commandId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on custom commands.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /customCommands/{commandId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures person records, allowing only authenticated users to read, create, update, and delete.
+     * @path /persons/{personId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on person records.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /persons/{personId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+
+    /**
+     * @description Secures ledger entries for a specific person, allowing only authenticated users to read, create, update, and delete.
+     * @path /persons/{personId}/ledgers/{ledgerId}
+     * @allow (get, create, update, delete) - Any authenticated user can perform operations on ledger entries.
+     * @deny N/A
+     * @principle Requires authentication for all operations.
+     */
+    match /persons/{personId}/ledgers/{ledgerId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource != null;
+      allow delete: if isSignedIn() && resource != null;
+    }
+  }
+}

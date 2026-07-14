@@ -1,0 +1,714 @@
+
+{
+  "entities": {
+    "UserPin": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "UserPin",
+      "type": "object",
+      "description": "Stores a user's security PIN.",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The user's email, acting as the unique ID."
+        },
+        "pin": {
+          "type": "string",
+          "description": "The 4-digit security PIN (would be hashed in a real production app)."
+        }
+      },
+      "required": ["userId", "pin"]
+    },
+    "AppSettings": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "AppSettings",
+      "type": "object",
+      "description": "Stores global configuration for the application.",
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": ["light", "dark", "system"],
+          "description": "The color theme for the application."
+        },
+        "invoiceDaysMonthly": {
+          "type": "number",
+          "description": "Days before expiry to generate monthly invoices."
+        },
+        "invoiceDaysYearly": {
+          "type": "number",
+          "description": "Days before expiry to generate yearly invoices."
+        },
+        "simCostPerDevice": {
+          "type": "number",
+          "description": "The cost of a single SIM card for automated expense tracking."
+        },
+        "monthlyYearlyThreshold": {
+          "type": "number",
+          "description": "The renewal fee amount that separates a monthly from a yearly plan."
+        }
+      },
+      "required": ["theme", "invoiceDaysMonthly", "invoiceDaysYearly", "simCostPerDevice", "monthlyYearlyThreshold"]
+    },
+    "Dealer": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Dealer",
+      "type": "object",
+      "description": "Represents a dealer who can be allocated stock.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the Dealer entity."
+        },
+        "name": {
+          "type": "string",
+          "description": "The name of the dealer."
+        },
+        "phone": {
+          "type": "string",
+          "description": "The phone number of the dealer."
+        },
+        "address": {
+          "type": "string",
+          "description": "The physical address of the dealer."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp of when the dealer was added.",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "name", "phone", "address", "createdAt"]
+    },
+    "StockAllocation": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "StockAllocation",
+      "type": "object",
+      "description": "Represents the allocation of inventory items to a specific dealer.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the StockAllocation entity."
+        },
+        "inventoryItemId": {
+          "type": "string",
+          "description": "Reference to the InventoryItem model (e.g., 'GT06 Tracker')."
+        },
+        "dealerId": {
+          "type": "string",
+          "description": "Reference to the Dealer."
+        },
+        "quantity": {
+          "type": "number",
+          "description": "The quantity of a bulk item allocated."
+        },
+        "allocatedImeis": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "A list of specific IMEIs allocated (for trackers)."
+        },
+        "allocatedSims": {
+            "type": "array",
+            "items": { "$ref": "#/entities/SimCard" },
+            "description": "A list of specific SIMs allocated."
+        },
+        "allocatedAt": {
+          "type": "string",
+          "description": "Timestamp of when the allocation was made.",
+          "format": "date-time"
+        },
+        "allocatedBy": {
+          "type": "string",
+          "description": "Name of the admin who made the allocation."
+        }
+      },
+      "required": ["id", "inventoryItemId", "dealerId", "allocatedAt", "allocatedBy"]
+    },
+    "DevicePlan": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "DevicePlan",
+      "type": "object",
+      "description": "Stores the subscription details for a specific device.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the DevicePlan entity."
+        },
+        "traccarDeviceId": {
+          "type": "number",
+          "description": "ID of the device in the server."
+        },
+        "imei": {
+          "type": "string",
+          "description": "IMEI of the device."
+        },
+        "subscriptionStart": {
+          "type": "string",
+          "description": "Start date of the subscription.",
+          "format": "date-time"
+        },
+        "subscriptionType": {
+          "type": "string",
+          "enum": ["firstYear", "renewal"],
+          "description": "Type of subscription (firstYear or renewal)."
+        },
+        "renewalFee": {
+          "type": "number",
+          "description": "The amount to be charged at every renewal."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Notes related to the device plan."
+        },
+        "discount": {
+          "type": "number",
+          "description": "Discount amount to be applied to the subscription fee."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp of when the device plan was created.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "traccarDeviceId",
+        "imei",
+        "subscriptionStart",
+        "subscriptionType",
+        "renewalFee"
+      ]
+    },
+    "Invoice": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Invoice",
+      "type": "object",
+      "description": "Represents an invoice, which can be for a single device or a combination of devices for the same customer.",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the Invoice entity." },
+        "deviceIds": { "type": "array", "items": { "type": "number" }, "description": "List of device IDs included in this invoice." },
+        "customerIdentifier": { "type": "string", "description": "A unique customer identifier (e.g., phone number) for grouping." },
+        "totalAmount": { "type": "number", "description": "Total amount of the invoice." },
+        "periodStart": { "type": "string", "format": "date-time", "description": "The earliest start date of the billing periods included." },
+        "periodEnd": { "type": "string", "format": "date-time", "description": "The latest end date of the billing periods included." },
+        "status": { "type": "string", "description": "Status of the invoice (pending, paid)." },
+        "paidAt": { "type": "string", "format": "date-time", "description": "Timestamp of when the invoice was paid." },
+        "paidBy": { "type": "string", "description": "Name of the admin who marked the invoice as paid." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of when the invoice was created." },
+        "extensionDays": { "type": "number", "description": "Number of days the subscription was extended." },
+        "extensionGrantedAt": { "type": "string", "format": "date-time", "description": "Timestamp of when the extension was granted." }
+      },
+      "required": ["id", "deviceIds", "totalAmount", "periodStart", "periodEnd", "status"]
+    },
+    "InvoiceItem": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "InvoiceItem",
+      "type": "object",
+      "description": "Represents a single billable item on an invoice, typically a device renewal.",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the InvoiceItem entity." },
+        "invoiceId": { "type": "string", "description": "Reference to Invoice." },
+        "deviceId": { "type": "number", "description": "The specific device this line item is for." },
+        "description": { "type": "string", "description": "Description of the invoice item (e.g., 'Subscription Renewal for ABC-123')." },
+        "baseAmount": { "type": "number" },
+        "simCharges": { "type": "number" },
+        "otherCharges": { "type": "number" },
+        "discount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "periodStart": { "type": "string", "format": "date-time" },
+        "periodEnd": { "type": "string", "format": "date-time" },
+        "durationType": { "type": "string", "enum": ["monthly", "yearly"] }
+      },
+      "required": ["id", "invoiceId", "deviceId", "description", "totalAmount"]
+    },
+    "Expense": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Expense",
+      "type": "object",
+      "description": "Represents a business expense or a person-specific transaction.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the Expense entity."
+        },
+        "inventoryItemId": {
+          "type": "string",
+          "description": "Reference to the InventoryItem if this is a stock purchase."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title or name of the expense."
+        },
+        "amount": {
+          "type": "number",
+          "description": "The monetary value of the expense."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "fuel",
+            "staff_salary",
+            "installation",
+            "sim_charges",
+            "rent",
+            "stock_purchase",
+            "people_transaction",
+            "commission",
+            "other"
+          ],
+          "description": "Category of the expense."
+        },
+        "date": {
+          "type": "string",
+          "description": "The date the expense was incurred.",
+          "format": "date-time"
+        },
+        "monthId": {
+          "type": "string",
+          "description": "Identifier for the month of the expense, e.g., '2024-07'."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about the expense."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved"],
+          "description": "The approval status of the expense."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Name of the user who created the expense entry."
+        },
+        "personId": {
+          "type": "string",
+          "description": "Reference to the Person if this is a person-specific transaction."
+        },
+        "dealerId": {
+          "type": "string",
+          "description": "Reference to the Dealer if this is a commission."
+        },
+        "transactionType": {
+            "type": "string",
+            "enum": ["incoming", "outgoing"],
+            "description": "The type of transaction for a person (payment or receipt)."
+        }
+      },
+      "required": ["id", "title", "amount", "type", "date", "createdBy", "status"]
+    },
+    "Sale": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Sale",
+      "type": "object",
+      "description": "Represents a new device sale and installation.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the Sale entity."
+        },
+        "customerName": {
+          "type": "string",
+          "description": "The name of the customer."
+        },
+        "vehicleNumber": {
+          "type": "string",
+          "description": "The vehicle's registration number."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Total amount paid for the sale."
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Date of the sale."
+        },
+        "imei": {
+          "type": "string",
+          "description": "IMEI of the installed tracker."
+        },
+        "simNumber": {
+          "type": "string",
+          "description": "Phone number of the installed SIM card."
+        },
+        "imsi": {
+          "type": "string",
+          "description": "IMSI of the installed SIM card."
+        },
+        "phoneRobocall": {
+          "type": "string",
+          "description": "Phone number used for automated robocall alerts."
+        },
+        "contactNumber": {
+          "type": "string",
+          "description": "Primary contact number for the customer."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Name of the admin who logged the sale."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about the sale."
+        },
+        "dealerId": {
+          "type": "string",
+          "description": "ID of the dealer who made the sale."
+        },
+        "commission": {
+          "type": "number",
+          "description": "Commission amount paid to the dealer."
+        },
+        "status": {
+            "type": "string",
+            "enum": ["active", "unsubscribed"],
+            "description": "The current status of the subscription."
+        },
+        "unsubscribedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of when the subscription was ended."
+        },
+        "unsubscribeReason": {
+            "type": "string",
+            "description": "The reason for ending the subscription."
+        }
+      },
+      "required": [
+        "id",
+        "customerName",
+        "vehicleNumber",
+        "amount",
+        "date",
+        "imei",
+        "simNumber",
+        "imsi",
+        "phoneRobocall",
+        "createdBy",
+        "status"
+      ]
+    },
+    "CompanyVehicle": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CompanyVehicle",
+      "type": "object",
+      "description": "Represents a new device installation for a company vehicle.",
+       "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the CompanyVehicle entity."
+        },
+        "customerName": {
+          "type": "string",
+          "description": "The name of the customer (often internal department)."
+        },
+        "vehicleNumber": {
+          "type": "string",
+          "description": "The vehicle's registration number."
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Date of the installation."
+        },
+        "imei": {
+          "type": "string",
+          "description": "IMEI of the installed tracker."
+        },
+        "simNumber": {
+          "type": "string",
+          "description": "Phone number of the installed SIM card."
+        },
+        "imsi": {
+          "type": "string",
+          "description": "IMSI of the installed SIM card."
+        },
+        "phoneRobocall": {
+          "type": "string",
+          "description": "Phone number used for automated robocall alerts."
+        },
+        "contactNumber": {
+          "type": "string",
+          "description": "Primary contact number for the vehicle user."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Name of the admin who logged the installation."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about the installation."
+        }
+      },
+      "required": [
+        "id",
+        "customerName",
+        "vehicleNumber",
+        "date",
+        "imei",
+        "simNumber",
+        "imsi",
+        "phoneRobocall",
+        "createdBy"
+      ]
+    },
+     "Log": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Log",
+      "type": "object",
+      "description": "Represents an audit log entry for an admin action.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the Log entity."
+        },
+        "action": {
+          "type": "string",
+          "description": "A description of the action performed by the admin."
+        },
+        "adminName": {
+          "type": "string",
+          "description": "The name of the admin who performed the action."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp of when the log entry was created.",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "action", "adminName", "createdAt"]
+    },
+    "SimCard": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SimCard",
+      "type": "object",
+      "description": "A SIM card with its number and IMSI.",
+      "properties": {
+        "simNumber": { "type": "string" },
+        "imsi": { "type": "string" }
+      },
+      "required": ["simNumber", "imsi"]
+    },
+    "InventoryItem": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "InventoryItem",
+      "type": "object",
+      "description": "Represents an item in the company's inventory.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the inventory item."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the item (e.g., 'GT06 Tracker', 'Jazz SIM')."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["tracker", "relay", "sim", "wire_plug_harness", "mic", "sos_button", "other"],
+          "description": "The category of the inventory item."
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Total quantity in stock. For trackers and SIMs, this is derived from the count of unique identifiers."
+        },
+        "cost": {
+          "type": "number",
+          "description": "The purchase cost per unit."
+        },
+        "supplier": {
+          "type": "string",
+          "description": "The supplier from whom the item was purchased."
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of when the item was last updated."
+        },
+        "imeis": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "A list of unique IMEI numbers for tracker items."
+        },
+        "sims": {
+          "type": "array",
+          "items": { "$ref": "#/entities/SimCard" },
+          "description": "A list of SIM card details for SIM items."
+        }
+      },
+      "required": ["id", "name", "type", "quantity", "lastUpdated"]
+    },
+    "ApprovalRequest": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ApprovalRequest",
+        "type": "object",
+        "description": "Represents a request for a critical action that requires multi-user approval.",
+        "properties": {
+            "id": { "type": "string" },
+            "actionType": {
+                "type": "string",
+                "enum": ["approve_expense", "mark_invoice_unpaid", "clear_logs"]
+            },
+            "targetId": { "type": "string" },
+            "payload": { "type": "object" },
+            "status": {
+                "type": "string",
+                "enum": ["pending", "approved", "rejected"]
+            },
+            "requestedBy": { "type": "object", "properties": { "uid": { "type": "string" }, "name": { "type": "string" } } },
+            "approvals": { "type": "array", "items": { "type": "object", "properties": { "uid": { "type": "string" }, "name": { "type": "string" } } } },
+            "rejections": { "type": "array", "items": { "type": "object", "properties": { "uid": { "type": "string" }, "name": { "type": "string" }, "reason": { "type": "string" } } } },
+            "requiredApprovals": { "type": "number" },
+            "createdAt": { "type": "string", "format": "date-time" },
+            "resolvedAt": { "type": "string", "format": "date-time" },
+            "resolvedBy": { "type": "string" }
+        },
+        "required": ["id", "actionType", "targetId", "status", "requestedBy", "approvals", "requiredApprovals", "createdAt"]
+    },
+    "CustomCommand": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CustomCommand",
+      "type": "object",
+      "description": "Represents a reusable command that can be sent to devices.",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "description": "A user-friendly name for the command." },
+        "command": { "type": "string", "description": "The raw command string to be sent to the device." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "command", "createdAt"]
+    },
+    "Person": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Person",
+        "type": "object",
+        "description": "Represents an employee or a business partner.",
+        "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "phone": { "type": "string" },
+            "type": { "type": "string", "enum": ["employee", "partner"] },
+            "cnic": { "type": "string" },
+            "status": { "type": "string", "enum": ["active", "inactive"] },
+            "createdAt": { "type": "string", "format": "date-time" },
+            "updatedAt": { "type": "string", "format": "date-time" },
+            "totalIncoming": { "type": "number" },
+            "totalOutgoing": { "type": "number" },
+            "balance": { "type": "number" }
+        },
+        "required": ["id", "name", "phone", "type", "status", "createdAt", "updatedAt"]
+    },
+    "LedgerEntry": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "LedgerEntry",
+        "type": "object",
+        "description": "Represents a financial transaction for a person.",
+        "properties": {
+            "id": { "type": "string" },
+            "date": { "type": "string", "format": "date-time" },
+            "type": { "type": "string", "enum": ["incoming", "outgoing"] },
+            "description": { "type": "string" },
+            "paymentMethod": { "type": "string", "enum": ["cash", "bank", "wallet"] },
+            "amount": { "type": "number" },
+            "addedBy": { "type": "string" },
+            "attachmentUrl": { "type": "string" }
+        },
+        "required": ["id", "date", "type", "description", "amount", "addedBy"]
+    }
+  },
+  "auth": {
+    "providers": [
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "/userPins/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserPin"
+      },
+      "description": "Stores security PINs for individual users, with the user's email as the document ID."
+    },
+    "/appSettings/main": {
+      "schema": {
+        "$ref": "#/entities/AppSettings"
+      },
+      "description": "Stores a single document containing global application settings."
+    },
+    "/dealers/{dealerId}": {
+      "schema": {
+        "$ref": "#/entities/Dealer"
+      },
+      "description": "Stores dealer information."
+    },
+    "/stockAllocations/{allocationId}": {
+      "schema": {
+        "$ref": "#/entities/StockAllocation"
+      },
+      "description": "Stores records of inventory allocated to different dealers."
+    },
+    "/invoices/{invoiceId}": {
+      "schema": {
+        "$ref": "#/entities/Invoice"
+      },
+      "description": "Stores invoice records. Can be for one or more devices for the same customer."
+    },
+    "/invoiceItems/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/InvoiceItem"
+      },
+      "description": "Stores the line items for a specific invoice, where each item corresponds to a device renewal."
+    },
+    "/expenses/{expenseId}": {
+      "schema": {
+        "$ref": "#/entities/Expense"
+      },
+      "description": "Stores business expense records."
+    },
+    "/sales/{saleId}": {
+      "schema": {
+        "$ref": "#/entities/Sale"
+      },
+      "description": "Stores records of new device sales and installations."
+    },
+    "/companyVehicles/{vehicleId}": {
+        "schema": {
+            "$ref": "#/entities/CompanyVehicle"
+        },
+        "description": "Stores records of company vehicle installations."
+    },
+    "/logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/Log"
+      },
+      "description": "Stores audit trail records of admin activities."
+    },
+    "/inventory/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/InventoryItem"
+      },
+      "description": "Stores all inventory items, including trackers, SIMs, and accessories."
+    },
+    "/approvalRequests/{requestId}": {
+        "schema": {
+            "$ref": "#/entities/ApprovalRequest"
+        },
+        "description": "Stores requests for critical actions that require multi-user approval."
+    },
+    "/customCommands/{commandId}": {
+      "schema": {
+        "$ref": "#/entities/CustomCommand"
+      },
+      "description": "Stores custom reusable commands for devices."
+    },
+    "/persons/{personId}": {
+      "schema": {
+        "$ref": "#/entities/Person"
+      },
+      "description": "Stores employee and partner records."
+    },
+    "/persons/{personId}/ledgers/{ledgerId}": {
+      "schema": {
+        "$ref": "#/entities/LedgerEntry"
+      },
+      "description": "Stores financial transactions for a specific person, which is now deprecated in favor of storing them in the Expenses collection."
+    }
+  }
+}
