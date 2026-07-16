@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { CommandChannel } from '@/lib/traccar-commands';
+import { toSmsE164 } from '@/lib/utils';
 
 export type CommandThread = {
   id: string;
@@ -15,7 +16,7 @@ export type CommandThread = {
   status: 'pending' | 'sent' | 'queued' | 'failed';
   detail?: string;
   sentAt: string;
-  responses: Array<{ text: string; timestamp: string }>;
+  responses: Array<{ id?: string; text: string; timestamp: string }>;
 };
 
 /** @deprecated Legacy shape — migrated on load */
@@ -46,6 +47,15 @@ type CommandThreadState = {
     deviceName: string;
     result: string;
     commandName?: string;
+  }) => void;
+  addSmsResponse: (input: {
+    id: string;
+    fromNumber: string;
+    normalizedFrom: string;
+    message: string;
+    receivedAt: string;
+    vehicleNumber?: string | null;
+    imsi?: string | null;
   }) => void;
   clearThreads: () => void;
 };
@@ -129,8 +139,65 @@ export const useCommandResultStore = create<CommandThreadState>()(
               status: 'sent',
               sentAt: new Date().toISOString(),
               responses: [{ text: input.result, timestamp: new Date().toISOString() }],
-            },
+            } as CommandThread,
             ...s.threads,
+          ].slice(0, MAX_THREADS),
+        }));
+      },
+      addSmsResponse: (input) => {
+        const state = get();
+        if (
+          state.threads.some((thread) =>
+            thread.responses.some((response) => response.id === input.id)
+          )
+        ) {
+          return;
+        }
+
+        const sender = toSmsE164(input.normalizedFrom || input.fromNumber);
+        const threadIndex = state.threads.findIndex((thread) => {
+          const threadSim = thread.simNumber ? toSmsE164(thread.simNumber) : null;
+          return (
+            thread.channel === 'sms' &&
+            Boolean(sender) &&
+            threadSim === sender &&
+            thread.responses.length === 0
+          );
+        });
+
+        if (threadIndex !== -1) {
+          const threads = [...state.threads];
+          const target = { ...threads[threadIndex] };
+          target.responses = [
+            ...target.responses,
+            { id: input.id, text: input.message, timestamp: input.receivedAt },
+          ];
+          target.status = 'sent';
+          target.detail = `SMS response received from ${sender || input.fromNumber}`;
+          threads[threadIndex] = target;
+          set({ threads });
+          return;
+        }
+
+        set((current) => ({
+          threads: [
+            {
+              id: newThreadId(),
+              deviceId: 0,
+              deviceName: input.vehicleNumber || input.fromNumber,
+              simNumber: sender || input.fromNumber,
+              imsi: input.imsi || null,
+              commandName: 'Incoming SMS',
+              commandText: '',
+              channel: 'sms',
+              status: 'sent',
+              detail: 'Unmatched incoming SMS',
+              sentAt: input.receivedAt,
+              responses: [
+                { id: input.id, text: input.message, timestamp: input.receivedAt },
+              ],
+            } as CommandThread,
+            ...current.threads,
           ].slice(0, MAX_THREADS),
         }));
       },

@@ -79,6 +79,27 @@ model Device {
   @@map("devices")
 }
 
+model SmsResponse {
+  id              String   @id @default(uuid())
+  type            String   @default("sms_received")
+  gatewayId       String
+  fromNumber      String
+  normalizedFrom  String
+  message         String   @db.Text
+  receivedAt      DateTime
+  vehicleNumber   String?
+  customerName    String?
+  customerNumber  String?
+  saleId          String?
+  imsi            String?
+  createdAt       DateTime @default(now())
+
+  @@index([normalizedFrom])
+  @@index([receivedAt])
+  @@index([saleId])
+  @@map("sms_responses")
+}
+
 model Transaction {
   id           Int           @id @default(autoincrement())
   userId       Int

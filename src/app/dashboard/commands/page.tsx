@@ -7,6 +7,7 @@ import AddCommandForm from '@/components/dashboard/commands/add-command-form';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import CommandResultList from '@/components/dashboard/commands/command-result-list';
 import SendDirectCommandForm from '@/components/dashboard/commands/send-direct-command-form';
+import SmsResponseList from '@/components/dashboard/commands/sms-response-list';
 
 export default function CommandsPage() {
   return (
@@ -44,6 +45,7 @@ export default function CommandsPage() {
       </div>
 
       <CommandResultList />
+      <SmsResponseList />
     </div>
   );
 }
