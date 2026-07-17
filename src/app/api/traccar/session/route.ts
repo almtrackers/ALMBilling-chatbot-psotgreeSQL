@@ -113,6 +113,15 @@ async function proxySession(req: NextRequest) {
 
     const body = await response.arrayBuffer();
 
+    // 204/205/304 must not carry a body — the Response constructor throws otherwise
+    // (Traccar returns 204 on DELETE /session, i.e. logout).
+    if (response.status === 204 || response.status === 205 || response.status === 304) {
+      return new Response(null, {
+        status: response.status,
+        headers: responseHeaders,
+      });
+    }
+
     if (!response.ok) {
       const text = new TextDecoder().decode(body);
       console.error(

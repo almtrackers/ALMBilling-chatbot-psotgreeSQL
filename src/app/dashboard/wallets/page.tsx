@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import PageHeader from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -15,7 +15,14 @@ import {
   Settings2,
   RefreshCw,
   Smartphone,
+  UserPlus,
+  Calculator,
+  AlertTriangle,
 } from 'lucide-react';
+import PinPromptDialog from '@/components/security/pin-prompt-dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import CreateWalletDialog from '@/components/dashboard/wallets/create-wallet-dialog';
+import WalletStatementDialog from '@/components/dashboard/wallets/wallet-statement-dialog';
 import { useToast } from '@/hooks/use-toast';
 import {
   Dialog,
@@ -35,19 +42,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Combobox } from '@/components/ui/combobox';
+
+const WALLETS_PER_PAGE = 25;
 
 export default function WalletsPage() {
   const [wallets, setWallets] = useState<WalletUser[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [balanceFilter, setBalanceFilter] = useState('all');
+  const [isPinDialogOpen, setIsPinDialogOpen] = useState(false);
+  const [unlinkedDevices, setUnlinkedDevices] = useState<
+    { id: number; name: string; uniqueId: string; ownerName: string | null; reason: string }[]
+  >([]);
+  const [showAllUnlinked, setShowAllUnlinked] = useState(false);
   const [selectedWallet, setSelectedWallet] = useState<WalletUser | null>(null);
   const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false);
   const [updateAmount, setUpdateAmount] = useState('');
   const [updateDescription, setUpdateDescription] = useState('');
   const [updateType, setUpdateType] = useState<'credit' | 'debit'>('credit');
-  const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isStatementDialogOpen, setIsStatementDialogOpen] = useState(false);
+  const [statementUserId, setStatementUserId] = useState<number | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isDeviceDialogOpen, setIsDeviceDialogOpen] = useState(false);
   const [isFixedBillDialogOpen, setIsFixedBillDialogOpen] = useState(false);
+  const [isTransferDialogOpen, setIsTransferDialogOpen] = useState(false);
+  const [targetWalletId, setTargetWalletId] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<WalletDevice | null>(null);
   const [offlineHours, setOfflineHours] = useState<number>(0);
   const [total96PlusOfflineHours, setTotal96PlusOfflineHours] = useState<number>(0);
@@ -76,11 +99,45 @@ export default function WalletsPage() {
     }
   };
 
+  const fetchUnlinkedDevices = async () => {
+    try {
+      const res = await fetch('/api/wallet/unlinked-devices');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.devices)) {
+        setUnlinkedDevices(data.devices);
+      }
+    } catch {
+      // Non-critical — the warning banner just stays hidden.
+    }
+  };
+
   useEffect(() => {
     fetchWallets();
+    fetchUnlinkedDevices();
   }, []);
 
-  const handleUpdateBalance = async () => {
+  const handleSyncBilling = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/wallet/sync', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Sync failed');
+      const s = data.stats;
+      toast({
+        title: 'Billing synced',
+        description: `${s.devicesLinked} devices linked, ${s.debitsPosted} charges posted, ${s.creditsPosted} payments credited, ${s.invoicesAutoPaid} invoices auto-paid from surplus.${s.skippedStaff > 0 ? ` ${s.skippedStaff} staff-owned devices skipped (create wallet manually).` : ''}`,
+      });
+      fetchWallets();
+      fetchUnlinkedDevices();
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Sync Failed', description: error.message });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Step 1: validate the form, then ask for the security PIN.
+  const handleUpdateBalance = () => {
     if (!selectedWallet || !updateAmount) return;
 
     const amountNum = parseFloat(updateAmount);
@@ -89,6 +146,14 @@ export default function WalletsPage() {
       return;
     }
 
+    setIsPinDialogOpen(true);
+  };
+
+  // Step 2: perform the balance change with the verified PIN.
+  const executeUpdateBalance = async (pin: string) => {
+    if (!selectedWallet || !updateAmount) return;
+
+    const amountNum = parseFloat(updateAmount);
     const finalAmount = updateType === 'credit' ? amountNum : -amountNum;
 
     try {
@@ -100,6 +165,7 @@ export default function WalletsPage() {
           customerName: selectedWallet.name,
           amount: finalAmount,
           description: updateDescription || `${updateType === 'credit' ? 'Manual Credit' : 'Manual Debit'} by Admin`,
+          pin,
         }),
       });
       const data = await res.json();
@@ -174,11 +240,73 @@ export default function WalletsPage() {
     }
   };
 
-  const filteredWallets = wallets.filter(w =>
-    w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    w.phone?.includes(searchTerm) ||
-    w.email?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleTransferDevice = async () => {
+    if (!selectedDevice || !selectedWallet || !targetWalletId) return;
+    setIsTransferring(true);
+    try {
+      const res = await fetch('/api/wallet/transfer-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceId: selectedDevice.id,
+          targetUserId: Number(targetWalletId),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Device transfer failed.');
+      }
+
+      toast({ title: 'Device Transferred', description: data.message });
+      setIsTransferDialogOpen(false);
+      setIsDeviceDialogOpen(false);
+      setTargetWalletId('');
+      setSelectedDevice(null);
+      setSelectedWallet(null);
+      await fetchWallets();
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Transfer Failed',
+        description: error.message || 'Could not transfer the device.',
+      });
+    } finally {
+      setIsTransferring(false);
+    }
+  };
+
+  const filteredWallets = wallets.filter(w => {
+    const matchesSearch =
+      w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      w.phone?.includes(searchTerm) ||
+      w.email?.toLowerCase().includes(searchTerm.toLowerCase());
+    if (!matchesSearch) return false;
+
+    switch (balanceFilter) {
+      case 'surplus':
+        return w.balance > 0;
+      case 'negative':
+        return w.balance < 0;
+      case 'zero':
+        return w.balance === 0;
+      case 'low':
+        return w.lowBalanceWarning === true;
+      default:
+        return true;
+    }
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredWallets.length / WALLETS_PER_PAGE));
+
+  const paginatedWallets = useMemo(() => {
+    const startIndex = (currentPage - 1) * WALLETS_PER_PAGE;
+    return filteredWallets.slice(startIndex, startIndex + WALLETS_PER_PAGE);
+  }, [filteredWallets, currentPage]);
+
+  // Reset to the first page when the search or filter changes.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, balanceFilter]);
 
   return (
     <div className="space-y-6">
@@ -186,13 +314,65 @@ export default function WalletsPage() {
         title="Wallet Management"
         description="Manage user balances and per-device billing settings."
       >
-        <Button onClick={fetchWallets} variant="outline" size="sm">
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setIsCreateDialogOpen(true)} variant="outline" size="sm">
+            <UserPlus className="mr-2 h-4 w-4" />
+            Create Wallet
+          </Button>
+          <Button onClick={handleSyncBilling} size="sm" disabled={isSyncing}>
+            <Calculator className={`mr-2 h-4 w-4 ${isSyncing ? 'animate-pulse' : ''}`} />
+            {isSyncing ? 'Calculating...' : 'Sync & Recalculate'}
+          </Button>
+          <Button onClick={fetchWallets} variant="outline" size="sm">
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
       </PageHeader>
 
-      <div className="flex items-center gap-4">
+      {unlinkedDevices.length > 0 && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>
+            {unlinkedDevices.length} vehicle{unlinkedDevices.length === 1 ? ' is' : 's are'} not
+            connected to any wallet
+          </AlertTitle>
+          <AlertDescription>
+            These vehicles are running without wallet billing (company vehicles excluded).
+            <ul className="mt-2 list-none space-y-1">
+              {(showAllUnlinked ? unlinkedDevices : unlinkedDevices.slice(0, 5)).map((device) => (
+                <li
+                  key={device.id}
+                  className="flex flex-col gap-0.5 rounded-md border border-dashed border-red-300/50 bg-red-500/5 p-2 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <span>
+                    <strong>{device.name}</strong>
+                    <span className="ml-2 font-mono text-xs">IMEI: {device.uniqueId}</span>
+                    {device.ownerName && (
+                      <span className="ml-2 text-xs">Owner: {device.ownerName}</span>
+                    )}
+                  </span>
+                  <span className="text-xs opacity-80">{device.reason}</span>
+                </li>
+              ))}
+            </ul>
+            {unlinkedDevices.length > 5 && (
+              <Button
+                variant="link"
+                size="sm"
+                className="mt-1 h-auto p-0 text-destructive underline"
+                onClick={() => setShowAllUnlinked((v) => !v)}
+              >
+                {showAllUnlinked
+                  ? 'Show less'
+                  : `Show all ${unlinkedDevices.length} vehicles`}
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -202,6 +382,18 @@ export default function WalletsPage() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        <Select value={balanceFilter} onValueChange={setBalanceFilter}>
+          <SelectTrigger className="w-full sm:w-[220px]">
+            <SelectValue placeholder="Filter by balance..." />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Balances</SelectItem>
+            <SelectItem value="surplus">Surplus Balance (&gt; 0)</SelectItem>
+            <SelectItem value="negative">Negative Balance (&lt; 0)</SelectItem>
+            <SelectItem value="zero">Zero Balance</SelectItem>
+            <SelectItem value="low">Low for Next Billing ⚠️</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <Card>
@@ -212,6 +404,7 @@ export default function WalletsPage() {
                 <TableHead>Customer</TableHead>
                 <TableHead>Contact</TableHead>
                 <TableHead>Balance</TableHead>
+                <TableHead>Upcoming Charges</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Devices</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -220,18 +413,18 @@ export default function WalletsPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                     Loading wallets...
                   </TableCell>
                 </TableRow>
               ) : filteredWallets.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                     No wallets found.
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredWallets.map((wallet) => (
+                paginatedWallets.map((wallet) => (
                   <TableRow key={wallet.id}>
                     <TableCell>
                       <div className="font-medium">{wallet.name}</div>
@@ -245,6 +438,28 @@ export default function WalletsPage() {
                       )}>
                         PKR {wallet.balance.toLocaleString()}
                       </span>
+                    </TableCell>
+                    <TableCell>
+                      {wallet.upcomingCharges && wallet.upcomingCharges > 0 ? (
+                        <div className="space-y-0.5">
+                          <div className="font-mono text-sm">
+                            PKR {wallet.upcomingCharges.toLocaleString()}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {wallet.nextBillingDate
+                              ? format(new Date(wallet.nextBillingDate), 'dd MMM yyyy')
+                              : ''}
+                          </div>
+                          {wallet.lowBalanceWarning && (
+                            <Badge variant="destructive" className="flex w-fit items-center gap-1">
+                              <AlertTriangle className="h-3 w-3" />
+                              Balance low
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={wallet.status === 'active' ? 'default' : 'destructive'}>
@@ -283,9 +498,10 @@ export default function WalletsPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        title="Full statement & history sheet"
                         onClick={() => {
-                          setSelectedWallet(wallet);
-                          setIsHistoryDialogOpen(true);
+                          setStatementUserId(wallet.id);
+                          setIsStatementDialogOpen(true);
                         }}
                       >
                         <History className="h-4 w-4" />
@@ -306,6 +522,37 @@ export default function WalletsPage() {
               )}
             </TableBody>
           </Table>
+          {!loading && filteredWallets.length > 0 && (
+            <div className="flex items-center justify-between border-t px-4 py-3">
+              <span className="text-sm text-muted-foreground">
+                Showing {(currentPage - 1) * WALLETS_PER_PAGE + 1}
+                {'–'}
+                {Math.min(currentPage * WALLETS_PER_PAGE, filteredWallets.length)} of{' '}
+                {filteredWallets.length} wallets
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                  disabled={currentPage === 1}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                  disabled={currentPage >= totalPages}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -344,47 +591,17 @@ export default function WalletsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isHistoryDialogOpen} onOpenChange={setIsHistoryDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Transaction History - {selectedWallet?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="py-4">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Balance</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {selectedWallet?.transactions?.map((tx) => (
-                  <TableRow key={tx.id}>
-                    <TableCell className="text-xs">{format(new Date(tx.createdAt), 'dd MMM yyyy HH:mm')}</TableCell>
-                    <TableCell className="text-sm">{tx.description}</TableCell>
-                    <TableCell className={cn(
-                      'font-mono text-sm',
-                      tx.type === 'credit' ? 'text-green-600' : 'text-destructive'
-                    )}>
-                      {tx.type === 'credit' ? '+' : '-'}{tx.amount.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{tx.balanceAfter.toLocaleString()}</TableCell>
-                  </TableRow>
-                ))}
-                {(!selectedWallet?.transactions || selectedWallet.transactions.length === 0) && (
-                  <TableRow>
-                    <TableCell colSpan={4} className="text-center py-4 text-muted-foreground">
-                      No recent transactions.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <CreateWalletDialog
+        open={isCreateDialogOpen}
+        onOpenChange={setIsCreateDialogOpen}
+        onCreated={fetchWallets}
+      />
+
+      <WalletStatementDialog
+        userId={statementUserId}
+        open={isStatementDialogOpen}
+        onOpenChange={setIsStatementDialogOpen}
+      />
 
       <Dialog open={isDeviceDialogOpen} onOpenChange={setIsDeviceDialogOpen}>
         <DialogContent className="max-w-3xl">
@@ -428,6 +645,18 @@ export default function WalletsPage() {
                       >
                         Fixed Bill
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          setSelectedDevice(device);
+                          setTargetWalletId('');
+                          setIsTransferDialogOpen(true);
+                        }}
+                      >
+                        Transfer
+                      </Button>
                       <Select
                         value={device.status}
                         onValueChange={async (newStatus) => {
@@ -468,6 +697,65 @@ export default function WalletsPage() {
               </TableBody>
             </Table>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isTransferDialogOpen}
+        onOpenChange={(open) => {
+          setIsTransferDialogOpen(open);
+          if (!open) setTargetWalletId('');
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Transfer Device</DialogTitle>
+            <DialogDescription>
+              Transfer {selectedDevice?.name} from {selectedWallet?.name} to another wallet.
+              Existing charges and history remain in the current wallet; future billing continues
+              in the destination wallet.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-4">
+            <label className="text-sm font-medium">Destination Wallet</label>
+            <Combobox
+              options={wallets
+                .filter(
+                  (wallet) =>
+                    wallet.id !== selectedWallet?.id && wallet.traccarId != null
+                )
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((wallet) => ({
+                  value: String(wallet.id),
+                  label: `${wallet.name}${wallet.phone ? ` — ${wallet.phone}` : ''}${wallet.email ? ` (${wallet.email})` : ''}`,
+                }))}
+              value={targetWalletId}
+              onChange={setTargetWalletId}
+              placeholder="Select destination wallet..."
+              searchPlaceholder="Search by name, phone or email..."
+              noResultsMessage="No matching wallet found."
+            />
+            <p className="text-xs text-muted-foreground">
+              Only wallets linked to a Traccar user can receive devices.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsTransferDialogOpen(false)}
+              disabled={isTransferring}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleTransferDevice}
+              disabled={!targetWalletId || isTransferring}
+            >
+              {isTransferring ? 'Transferring...' : 'Confirm Transfer'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -549,6 +837,14 @@ export default function WalletsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PinPromptDialog
+        open={isPinDialogOpen}
+        onOpenChange={setIsPinDialogOpen}
+        title="Confirm Wallet Balance Change"
+        description={`Enter the security PIN to ${updateType === 'credit' ? 'add money to' : 'remove money from'} ${selectedWallet?.name || 'this wallet'}.`}
+        onSuccess={executeUpdateBalance}
+      />
     </div>
   );
 }

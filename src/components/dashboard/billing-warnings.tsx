@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useBillingStatus } from '@/hooks/use-billing-status';
-import { AlertCircle, ServerCrash, ShoppingCart, PlusCircle, Trash2 } from 'lucide-react';
+import { AlertCircle, ServerCrash, ShoppingCart, PlusCircle, Trash2, Replace } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import QuickSaleForm from '@/components/dashboard/sales/quick-sale-form';
+import QuickReplaceHardwareDialog from '@/components/dashboard/sales/quick-replace-hardware-dialog';
 import QuickAddStockForm from '@/components/dashboard/inventory/quick-add-stock-form';
 import type { UnbilledDevice } from '@/hooks/use-billing-status';
 import { apiClient } from '@/lib/api';
@@ -46,6 +47,7 @@ export default function BillingWarnings() {
   const { mutate: mutateDevices } = useDevices();
   const { toast } = useToast();
   const [isQuickSaleOpen, setIsQuickSaleOpen] = useState(false);
+  const [isQuickReplaceOpen, setIsQuickReplaceOpen] = useState(false);
   const [isQuickAddStockOpen, setIsQuickAddStockOpen] = useState(false);
   const [isRemoveDialogOpen, setIsRemoveDialogOpen] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<UnbilledDevice | null>(null);
@@ -55,6 +57,11 @@ export default function BillingWarnings() {
   const handleMakeSale = (device: UnbilledDevice) => {
     setSelectedDevice(device);
     setIsQuickSaleOpen(true);
+  };
+
+  const handleReplaceHardware = (device: UnbilledDevice) => {
+    setSelectedDevice(device);
+    setIsQuickReplaceOpen(true);
   };
 
   const handleAddToStock = (device: UnbilledDevice) => {
@@ -140,10 +147,16 @@ export default function BillingWarnings() {
                 </div>
                 <div className="flex gap-2 shrink-0 mt-2 sm:mt-0">
                     {device.isInStock ? (
+                    <>
                     <Button size="sm" variant="ghost" onClick={() => handleMakeSale(device)}>
                         <ShoppingCart className="mr-2 h-4 w-4" />
                         Make Sale
                     </Button>
+                    <Button size="sm" variant="ghost" onClick={() => handleReplaceHardware(device)}>
+                        <Replace className="mr-2 h-4 w-4" />
+                        Replace Hardware
+                    </Button>
+                    </>
                     ) : (
                     <Button size="sm" variant="ghost" onClick={() => handleAddToStock(device)}>
                         <PlusCircle className="mr-2 h-4 w-4" />
@@ -177,6 +190,16 @@ export default function BillingWarnings() {
             )}
         </DialogContent>
       </Dialog>
+
+      <QuickReplaceHardwareDialog
+        open={isQuickReplaceOpen}
+        onOpenChange={setIsQuickReplaceOpen}
+        replacementDevice={selectedDevice}
+        onReplaced={() => {
+          mutateDevices();
+          mutateBillingStatus();
+        }}
+      />
       
       <Dialog open={isQuickAddStockOpen} onOpenChange={setIsQuickAddStockOpen}>
         <DialogContent className="sm:max-w-lg">

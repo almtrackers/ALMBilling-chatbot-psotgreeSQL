@@ -3,10 +3,32 @@ import axios from 'axios';
 import type { Event } from '@/lib/types';
 import { subHours, formatISO } from 'date-fns';
 
-export const apiClient = axios.create({
-  baseURL: '/api/traccar',
-  withCredentials: true,
-});
+// In the browser we go through the /api/traccar proxy (session cookie auth).
+// On the server (API routes, schedulers) relative URLs are invalid, so we call
+// Traccar directly using the same env config as traccar-client.
+const isServer = typeof window === 'undefined';
+
+function serverTraccarConfig() {
+  const baseURL = (process.env.TRACCAR_API_URL || 'https://app.almtrace.com/api').replace(/\/$/, '');
+  const user = process.env.TRACCAR_USER;
+  const pass = process.env.TRACCAR_PASS;
+  return {
+    baseURL,
+    headers:
+      user && pass
+        ? { Authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}` }
+        : undefined,
+  };
+}
+
+export const apiClient = axios.create(
+  isServer
+    ? serverTraccarConfig()
+    : {
+        baseURL: '/api/traccar',
+        withCredentials: true,
+      }
+);
 
 export const localApiClient = axios.create({
   baseURL: '/api',

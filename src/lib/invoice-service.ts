@@ -164,6 +164,111 @@ export async function generateInvoicesFromTraccar(
 }
 
 
+/** Resolve a device's current expiry from attributes / expirationTime. */
+function getDeviceExpiryDate(device: Device): Date | null {
+  const raw =
+    device.attributes?.expiryDate ||
+    (device.attributes as Record<string, unknown> | undefined)?.renewalDate ||
+    (device.attributes as Record<string, unknown> | undefined)?.renewal_date ||
+    device.expirationTime;
+  if (!raw) return null;
+  let parsed = typeof raw === 'string' ? parseISO(raw) : new Date(raw as string | number | Date);
+  if (isNaN(parsed.getTime())) parsed = new Date(String(raw));
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Generate invoices for devices whose subscription expires within `lookaheadDays`
+ * (default 7) — runs any day, unlike the monthly bulk generation. Users whose
+ * upcoming period is already covered by a pending invoice are skipped, so this
+ * is safe to run repeatedly (e.g. from a scheduler).
+ */
+export async function generateInvoicesForExpiringDevices(
+  adminName: string,
+  lookaheadDays = 7
+): Promise<{ usersChecked: number; invoicesGenerated: number; devicesExpiring: number; details: string[] }> {
+  const now = new Date();
+  const lookahead = addDays(now, lookaheadDays);
+  const details: string[] = [];
+
+  const devicesResponse = await apiClient.get<Device[]>('/devices');
+  if (devicesResponse.status !== 200) throw new Error('Failed to fetch devices from server.');
+  const allDevices = devicesResponse.data;
+
+  const userDevicesMap = new Map<number, Device[]>();
+  const expiringByUser = new Map<number, { device: Device; expiry: Date }[]>();
+
+  for (const device of allDevices) {
+    if (device.attributes?.EXT && Number(device.attributes.EXT) > 0) continue;
+
+    const renewalFee = Number(
+      device.attributes?.renewalFee ||
+      device.attributes?.renewal_fee ||
+      device.attributes?.renewlFee ||
+      device.attributes?.renewal_charge
+    ) || 0;
+    if (renewalFee === 0) continue;
+
+    const billingUserId = Number(device.attributes?.uId || device.attributes?.userId) || 0;
+    if (!billingUserId) continue;
+
+    if (!userDevicesMap.has(billingUserId)) userDevicesMap.set(billingUserId, []);
+    userDevicesMap.get(billingUserId)!.push(device);
+
+    const expiry = getDeviceExpiryDate(device);
+    if (!expiry || expiry > lookahead) continue;
+
+    if (!expiringByUser.has(billingUserId)) expiringByUser.set(billingUserId, []);
+    expiringByUser.get(billingUserId)!.push({ device, expiry });
+  }
+
+  let invoicesGenerated = 0;
+  let devicesExpiring = 0;
+
+  for (const [userId, expiring] of expiringByUser.entries()) {
+    devicesExpiring += expiring.length;
+    try {
+      const earliestExpiry = expiring.reduce(
+        (min, item) => (item.expiry < min ? item.expiry : min),
+        expiring[0].expiry
+      );
+
+      // Skip when any invoice (pending or paid) already covers the upcoming period.
+      const coveringInvoices = await prisma.invoice.findMany({
+        where: { customerIdentifier: String(userId), status: { in: ['pending', 'paid'] } },
+        select: { periodEnd: true },
+      });
+      const alreadyCovered = coveringInvoices.some(
+        (inv) => inv.periodEnd && new Date(inv.periodEnd) >= earliestExpiry
+      );
+      if (alreadyCovered) continue;
+
+      const result = await createBulkInvoiceForUser(userId, adminName, userDevicesMap.get(userId));
+      if (result.invoiceId) {
+        invoicesGenerated += 1;
+        const names = expiring.map((item) => item.device.name).join(', ');
+        const msg = `Pre-expiry invoice ${result.invoiceId} created for ${result.customerName} (uId ${userId}) — expiring device(s): ${names}`;
+        details.push(msg);
+        await addLog(msg, adminName, 'automation');
+      }
+    } catch (err: any) {
+      const msg = `Failed pre-expiry invoice for uId ${userId}: ${err?.message || err}`;
+      console.error(`❌ ${msg}`);
+      details.push(msg);
+    }
+  }
+
+  if (invoicesGenerated > 0) {
+    await addLog(
+      `Pre-expiry invoice run complete: ${invoicesGenerated} invoice(s) generated for ${expiringByUser.size} user(s) with devices expiring within ${lookaheadDays} days.`,
+      adminName,
+      'automation'
+    );
+  }
+
+  return { usersChecked: expiringByUser.size, invoicesGenerated, devicesExpiring, details };
+}
+
 export async function createBulkInvoiceForUser(
     userId: number,
     adminName: string,
@@ -830,16 +935,28 @@ export async function grantInvoiceExtension(
  */
 export async function reverseTraccarDeviceExpiry(
   deviceId: number,
-  periodEndDate: Date
+  periodEndDate: Date,
+  durationType?: 'monthly' | 'yearly'
 ) {
-  const originalExpiryDate = periodEndDate;
-
   try {
     const deviceRes = await apiClient.get<Device[]>(`/devices?id=${deviceId}`);
     if (deviceRes.status !== 200 || deviceRes.data.length === 0) {
       throw new Error(`Could not fetch device with ID ${deviceId} from server.`);
     }
     const deviceToUpdate = deviceRes.data[0];
+
+    // Payment moved the expiry forward to the invoice's periodEnd, so undoing a
+    // payment must move it BACK one billing period. Setting it to periodEnd
+    // again would be a no-op. Without a durationType (extension reversal) we
+    // keep the old behavior of restoring the given date directly.
+    let originalExpiryDate = periodEndDate;
+    if (durationType) {
+      const currentRaw =
+        deviceToUpdate.attributes?.expiryDate || deviceToUpdate.expirationTime;
+      let base = currentRaw ? new Date(String(currentRaw)) : periodEndDate;
+      if (isNaN(base.getTime())) base = periodEndDate;
+      originalExpiryDate = durationType === 'yearly' ? subYears(base, 1) : subMonths(base, 1);
+    }
 
     // Remove position if it exists (not part of Device type but may be in API response)
     const { position: _, ...deviceData } = deviceToUpdate as any;

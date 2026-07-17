@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma/client';
+import { traccarClient } from '@/lib/traccar-client';
 import { v4 as uuidv4 } from 'uuid';
-import { subDays, parseISO } from 'date-fns';
+import { subDays } from 'date-fns';
+
+/** Count Traccar administrator accounts — these are the people who can vote. */
+async function countAdmins(): Promise<number> {
+  try {
+    const res = await traccarClient.get<Array<{ administrator?: boolean }>>('/users');
+    const admins = (res.data || []).filter((u) => u.administrator === true);
+    return admins.length;
+  } catch (error) {
+    console.error('Failed to count Traccar admins, defaulting to 2:', error);
+    return 2;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,11 +24,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // In a real app, you'd fetch admins from the DB.
-    // For now, let's assume we need at least 1 approval besides the requester if there are other admins.
-    // This is a placeholder logic.
-    const adminCount = await prisma.user.count();
-    const requiredApprovals = adminCount > 1 ? adminCount : 1;
+    // The requester counts as the first approval; one more admin must confirm.
+    const adminCount = await countAdmins();
+    const requiredApprovals = adminCount > 1 ? 2 : 1;
 
     if (requiredApprovals <= 1) {
       return NextResponse.json({ 
@@ -124,21 +135,29 @@ export async function PUT(req: NextRequest) {
             break;
           }
           case 'mark_invoice_unpaid': {
-            await prisma.invoice.update({
+            const revertedInvoice = await prisma.invoice.update({
               where: { id: request.targetId },
               data: { status: 'pending', paidAt: null, paidBy: null },
             });
-            
-            // Note: reverseTraccarDeviceExpiry needs to be handled. 
-            // Since this is server-side, we should probably call the Traccar API directly or a helper.
-            // For now, let's assume the Traccar API proxy is available.
-            const deviceIdsToRevert = payload.deviceIds || [payload.deviceId];
+
+            const { reverseTraccarDeviceExpiry } = await import('@/lib/invoice-service');
+            const deviceIdsToRevert: number[] = (payload.deviceIds || [payload.deviceId]).filter(Boolean);
+            const periodEnd = payload.periodEnd ? new Date(payload.periodEnd) : null;
+            const durationType =
+              revertedInvoice.durationType === 'yearly' ? 'yearly' : 'monthly';
+
             for (const deviceId of deviceIdsToRevert) {
-              // We'd need to fetch the device from Traccar to get its current expiry, 
-              // then subtract the period duration.
-              // This is complex for a single API route. 
-              // For now, let's log that this needs to be done.
-              console.log(`[TODO] Reverse Traccar device expiry for ${deviceId}`);
+              if (!periodEnd || isNaN(periodEnd.getTime())) {
+                console.warn(`Cannot reverse expiry for device ${deviceId}: invalid periodEnd in payload.`);
+                continue;
+              }
+              try {
+                // durationType makes the reversal subtract one billing period
+                // from the device's current expiry (undoing the payment).
+                await reverseTraccarDeviceExpiry(Number(deviceId), periodEnd, durationType);
+              } catch (revertError) {
+                console.error(`Failed to reverse expiry for device ${deviceId}:`, revertError);
+              }
             }
             break;
           }

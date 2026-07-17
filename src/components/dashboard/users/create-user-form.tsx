@@ -37,6 +37,19 @@ const formSchema = z.object({
     .refine((v) => !!normalizeCnic(v), {
       message: 'Invalid CNIC. Use 13 digits or XXXXX-XXXXXXX-X.',
     }),
+  cnicExpiry: z
+    .string()
+    .min(1, 'CNIC expiry date is required.')
+    .refine(
+      (v) => {
+        const date = new Date(v);
+        if (isNaN(date.getTime())) return false;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return date >= today;
+      },
+      { message: 'This CNIC is expired. Expired ID cards are not allowed.' }
+    ),
 });
 
 type CreateUserFormProps = {
@@ -60,6 +73,7 @@ export default function CreateUserForm({ setDialogOpen, onUserCreated }: CreateU
       emailOrPhone: '',
       password: '',
       cnic: '',
+      cnicExpiry: '',
     },
   });
 
@@ -152,6 +166,7 @@ export default function CreateUserForm({ setDialogOpen, onUserCreated }: CreateU
       const formData = new FormData();
       formData.append('name', values.name);
       formData.append('cnic', cnic.formatted);
+      formData.append('cnicExpiry', values.cnicExpiry);
       if (created?.id) formData.append('traccarId', String(created.id));
       if (isPhone) {
         formData.append('phone', values.emailOrPhone);
@@ -244,6 +259,23 @@ export default function CreateUserForm({ setDialogOpen, onUserCreated }: CreateU
               <FormLabel>CNIC</FormLabel>
               <FormControl>
                 <CnicInput value={field.value} onChange={field.onChange} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="cnicExpiry"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>CNIC Expiry Date</FormLabel>
+              <FormControl>
+                <Input
+                  type="date"
+                  min={new Date().toISOString().split('T')[0]}
+                  {...field}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>

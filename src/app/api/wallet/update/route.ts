@@ -3,6 +3,8 @@ import prisma from '@/lib/prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import axios from 'axios';
 import { addMonths, addYears } from 'date-fns';
+import { checkSecurityPin } from '@/lib/security-pin';
+import { getSessionUser } from '@/lib/server-auth';
 
 const TRACCAR_API_URL = process.env.TRACCAR_API_URL || 'https://app.almtrace.com/api';
 const TRACCAR_USER = process.env.TRACCAR_USER;
@@ -20,10 +22,21 @@ export async function POST(req: NextRequest) {
       planPrice,
       vehicleNumber,
       traccarUserId,
+      pin,
+      adminName,
     } = await req.json();
 
     if (!contactNumber) {
       return NextResponse.json({ success: false, message: 'Contact number is required.' }, { status: 400 });
+    }
+
+    // Adding/removing wallet money is a critical action — verify the security PIN.
+    const pinCheck = await checkSecurityPin(req, pin);
+    if (!pinCheck.valid) {
+      return NextResponse.json(
+        { success: false, message: 'Security PIN required or incorrect.' },
+        { status: 403 }
+      );
     }
 
     let user = await prisma.user.findUnique({
@@ -63,6 +76,15 @@ export async function POST(req: NextRequest) {
         amount: new Decimal(Math.abs(Number(amount))),
         balanceAfter: updatedUser.balance,
         description: description || `Wallet update for ${vehicleNumber || customerName || 'User'}`,
+      },
+    });
+
+    const sessionUser = await getSessionUser(req);
+    await prisma.log.create({
+      data: {
+        action: `Wallet ${Number(amount) >= 0 ? 'credit' : 'debit'} of PKR ${Math.abs(Number(amount)).toLocaleString()} for ${user.name} (wallet #${user.id}). New balance: PKR ${updatedUser.balance.toNumber().toLocaleString()}.${description ? ` Note: ${description}` : ''}`,
+        adminName: sessionUser?.name || sessionUser?.email || adminName || 'Admin',
+        type: 'update',
       },
     });
 

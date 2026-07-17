@@ -4,7 +4,7 @@ import { reverseTraccarDeviceExpiry } from '@/lib/invoice-service';
 
 export async function POST(req: NextRequest) {
   try {
-    const { deviceId, periodEndDate } = await req.json();
+    const { deviceId, periodEndDate, durationType } = await req.json();
 
     if (!deviceId || !periodEndDate) {
       return NextResponse.json(
@@ -15,7 +15,8 @@ export async function POST(req: NextRequest) {
 
     await reverseTraccarDeviceExpiry(
       Number(deviceId),
-      new Date(periodEndDate)
+      new Date(periodEndDate),
+      durationType === 'yearly' || durationType === 'monthly' ? durationType : undefined
     );
 
     return NextResponse.json({ success: true });

@@ -11,7 +11,10 @@ import { generateTripReportPdf, type TripReportRow } from '@/lib/chatbot/trip-re
 import { generateStopsReportPdf, type StopReportRow } from '@/lib/chatbot/stops-report-pdf';
 import { generateSummaryReportPdf, type SummaryReportRow } from '@/lib/chatbot/summary-report-pdf';
 import { generateEventsReportPdf, type EventsReportRow } from '@/lib/chatbot/events-report-pdf';
+import { generateWalletStatementPdf } from '@/lib/chatbot/wallet-statement-pdf';
 import { reverseGeocode } from '@/lib/geocoding';
+import { sendDeviceCommand } from '@/lib/traccar-commands';
+import { createSmsLocationRequest } from '@/lib/sms-location';
 
 async function sendChatbotMessage(to: string, message: string, options?: { ignoreOptOut?: boolean }) {
   await sendWhatsAppMessage(to, message, options);
@@ -38,6 +41,7 @@ const SERVICE_COMMANDS = [
   { command: 'resume engine', label: 'Resume Engine', hint: 'Engine unlock (password)', icon: '🟢' },
   { command: 'due date', label: 'Due Date', hint: 'Expiry / renewal date', icon: '📅' },
   { command: 'invoice', label: 'Invoice', hint: 'Last bill details', icon: '🧾' },
+  { command: 'wallet statement', label: 'Wallet Statement', hint: 'Complete PDF statement', icon: '💳' },
   { command: 'live chat', label: 'Live Chat', hint: 'Human agent se baat', icon: '💬' },
 ] as const;
 
@@ -169,6 +173,45 @@ async function scheduleFollowUpMessage(phoneNumber: string) {
     await sendChatbotMessage(phoneNumber, FOLLOW_UP_TEXT);
   }, FOLLOW_UP_DELAY_MS);
   followUpTimers.set(phoneNumber, timeout);
+}
+
+const ADVISORY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const ADVISORY_DELAY_MS = 8000;
+
+/**
+ * Once per 24h WhatsApp session: share current balance, upcoming charges,
+ * a low-balance warning when needed, and a cybersecurity tip.
+ * Sent with a small delay so the user's actual reply arrives first.
+ */
+async function maybeSendWalletAdvisory(
+  phoneNumber: string,
+  localUserId: number,
+  advisorySentAt: Date | null | undefined
+) {
+  try {
+    if (advisorySentAt && Date.now() - new Date(advisorySentAt).getTime() < ADVISORY_INTERVAL_MS) {
+      return;
+    }
+
+    // Mark as sent immediately so parallel messages don't duplicate it.
+    await prisma.userSession.update({
+      where: { phoneNumber },
+      data: { advisorySentAt: new Date() },
+    });
+
+    setTimeout(async () => {
+      try {
+        const { buildWalletAdvisory } = await import('@/lib/chatbot/wallet-advisory');
+        const advisory = await buildWalletAdvisory(localUserId);
+        if (!advisory) return;
+        await sendChatbotMessage(phoneNumber, advisory.message);
+      } catch (error) {
+        console.error('Failed to send wallet advisory:', error);
+      }
+    }, ADVISORY_DELAY_MS);
+  } catch (error) {
+    console.error('Wallet advisory scheduling failed:', error);
+  }
 }
 
 function normalizeConfirmation(input: string) {
@@ -589,6 +632,7 @@ async function processWebhookPayload(payload: any) {
     const user = registration.user;
 
     await scheduleFollowUpMessage(phoneNumber);
+    await maybeSendWalletAdvisory(phoneNumber, user.id, session.advisorySentAt);
 
     if (session.lastAction === 'AWAIT_IGNITION_CONFIRM' && isIgnitionConfirmation(messageBody)) {
       const devices = await fetchUserDevices(user.traccarId!);
@@ -632,6 +676,11 @@ async function processWebhookPayload(payload: any) {
     }
 
     if (messageBody === 'm') {
+      await prisma.$executeRaw`
+        UPDATE sms_location_requests
+        SET status = 'cancelled'
+        WHERE "phoneNumber" = ${phoneNumber} AND status = 'pending'
+      `;
       await prisma.userSession.update({
         where: { phoneNumber },
         data: { lastAction: 'SERVICE_MENU', lastCommand: null, selectedDeviceId: null },
@@ -784,6 +833,10 @@ async function processWebhookPayload(payload: any) {
         await requestLiveAgent(phoneNumber);
         return;
       }
+      if (mappedCommand === 'wallet statement') {
+        await sendWalletStatementPdf(phoneNumber, user.id);
+        return;
+      }
 
       const devices = await fetchUserDevices(user.traccarId!);
 
@@ -818,11 +871,16 @@ async function processWebhookPayload(payload: any) {
       'resume engine',
       'due date',
       'invoice',
+      'wallet statement',
       'live chat',
     ];
     if (commands.includes(messageBody)) {
       if (messageBody === 'live chat') {
         await requestLiveAgent(phoneNumber);
+        return;
+      }
+      if (messageBody === 'wallet statement') {
+        await sendWalletStatementPdf(phoneNumber, user.id);
         return;
       }
 
@@ -1449,6 +1507,40 @@ async function sendEventsReportPdf(
   }
 }
 
+async function sendWalletStatementPdf(phoneNumber: string, localUserId: number) {
+  await sendChatbotMessage(
+    phoneNumber,
+    '⏳ Preparing your complete wallet statement PDF...\nPlease wait.'
+  );
+
+  try {
+    const pdf = await generateWalletStatementPdf(localUserId);
+    const sent = await sendWhatsAppDocument(phoneNumber, pdf.buffer, pdf.fileName, {
+      caption: `Wallet Statement — ${pdf.walletName}\nCurrent balance: PKR ${pdf.balance.toLocaleString()}`,
+    });
+
+    if (!sent.success) {
+      throw new Error(sent.error ? String(sent.error) : 'WhatsApp document send failed');
+    }
+
+    await sendChatbotMessage(
+      phoneNumber,
+      `✅ Wallet statement PDF bhej diya gaya hai.\n\nCurrent balance: PKR ${pdf.balance.toLocaleString()}\n\n↩️ Type *M* for main menu.`
+    );
+  } catch (error) {
+    console.error('Failed to send wallet statement PDF:', error);
+    await sendChatbotMessage(
+      phoneNumber,
+      '❌ Wallet statement PDF banate waqt error aaya. Please later try karein.\n\n↩️ Type *M* for main menu.'
+    );
+  }
+
+  await prisma.userSession.update({
+    where: { phoneNumber },
+    data: { lastAction: null, lastCommand: null, selectedDeviceId: null },
+  });
+}
+
 async function requestLiveAgent(phoneNumber: string, customMessage?: string) {
   await prisma.userSession.update({
     where: { phoneNumber },
@@ -1507,12 +1599,56 @@ async function executeCommand(
 
   switch (command) {
     case 'location': {
-      const pos = await apiClient.get(`/positions?id=${device.positionId}`);
-      const position = pos.data[0];
+      let smsRequestError: unknown = null;
+      if (device.status !== 'online') {
+        try {
+          const result = await sendDeviceCommand(device.id, 'URL#', { channel: 'sms' });
+          if (result.status !== 'sent' || !result.simNumber) {
+            throw new Error(result.detail || 'SMS location command was not sent');
+          }
+
+          await createSmsLocationRequest({
+            phoneNumber,
+            deviceId: device.id,
+            deviceName: device.name,
+            simNumber: result.simNumber,
+          });
+          await prisma.userSession.update({
+            where: { phoneNumber },
+            data: {
+              lastAction: 'WAIT_SMS_LOCATION',
+              lastCommand: 'location',
+              selectedDeviceId: device.id,
+            },
+          });
+          await sendChatbotMessage(
+            phoneNumber,
+            `📡 ${device.name} is offline.\n\nLive location ke liye *URL#* command SMS se tracker ko bhej di gayi hai. Tracker ka reply receive hotay hi fresh location yahan automatically bhej di jayegi (usually 1-3 minutes).\n\n↩️ Type *M* to cancel and return to main menu.`
+          );
+          return;
+        } catch (error) {
+          smsRequestError = error;
+          console.error(`Offline SMS location request failed for device ${device.id}:`, error);
+        }
+      }
+
+      const pos = device.positionId
+        ? await apiClient.get(`/positions?id=${device.positionId}`)
+        : { data: [] };
+      const position = pos.data?.[0];
+      if (!position || !Number.isFinite(position.latitude) || !Number.isFinite(position.longitude)) {
+        await sendChatbotMessage(
+          phoneNumber,
+          `📍 Location unavailable for ${device.name}.${smsRequestError ? '\nSMS location request bhi send nahi ho saki. Please SIM/gateway configuration check karwain.' : ''}\n\n${getPostActionPrompt(allowDeviceSelection)}`
+        );
+        break;
+      }
       const mapLink = `https://www.google.com/maps?q=${position.latitude},${position.longitude}`;
       await sendChatbotMessage(
         phoneNumber,
-        `📍 Location of ${device.name}:\n\n${mapLink}\n\n${getPostActionPrompt(allowDeviceSelection)}`
+        smsRequestError
+          ? `⚠️ ${device.name} is offline and SMS location request failed. Last known location:\n\n${mapLink}\n\n${getPostActionPrompt(allowDeviceSelection)}`
+          : `📍 Location of ${device.name}:\n\n${mapLink}\n\n${getPostActionPrompt(allowDeviceSelection)}`
       );
       break;
     }

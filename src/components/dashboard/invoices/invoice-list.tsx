@@ -68,6 +68,7 @@ import { startOfMonth, startOfYear, addMonths, addYears } from 'date-fns';
 import ResolveUserDialog from './resolve-user-dialog';
 import EditInvoiceForm from './edit-invoice-form';
 import PinDialog from '@/components/auth/pin-dialog';
+import PinPromptDialog from '@/components/security/pin-prompt-dialog';
 import ExtendSubscriptionDialog from './extend-subscription-dialog';
 
 const RECORDS_PER_PAGE = 15;
@@ -76,6 +77,8 @@ type InvoiceListProps = {
   searchTerm: string;
   dateRange?: DateRange;
   statusFilter?: string[];
+  accountHolderFilter?: string;
+  paidByFilter?: string;
 };
 
 async function updateInvoiceApi(id: string, data: Partial<Invoice>) {
@@ -96,7 +99,13 @@ async function deleteInvoiceApi(id: string) {
   return response.json();
 }
 
-export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['all'] }: InvoiceListProps) {
+export default function InvoiceList({
+  searchTerm,
+  dateRange,
+  statusFilter = ['all'],
+  accountHolderFilter = 'all',
+  paidByFilter = 'all',
+}: InvoiceListProps) {
   const { user, isAdmin } = useAuth();
   const router = useRouter();
   const { devices } = useDevices();
@@ -113,6 +122,8 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [callingInvoiceId, setCallingInvoiceId] = useState<string | null>(null);
+  const [isMarkPaidPinOpen, setIsMarkPaidPinOpen] = useState(false);
+  const [pendingPaidInvoice, setPendingPaidInvoice] = useState<Invoice | null>(null);
   
   const { billingHistory } = useBillingHealth();
   const [isBreakdownDialogOpen, setIsBreakdownDialogOpen] = useState(false);
@@ -155,18 +166,35 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
       });
     }
 
-    // Search term filter (ID, device name, customer name, or contact)
+    // Search term filter (ID, device, customer, contact, or payment source).
     if (searchTerm) {
       filtered = filtered.filter(({ invoice, devices, userName, contact }) => {
-        const searchTermLower = searchTerm.toLowerCase();
+        const searchTermLower = searchTerm.trim().toLowerCase();
         const idMatch = invoice.id?.toLowerCase().includes(searchTermLower);
         const deviceNameMatch = devices.some(device => 
           device.name.toLowerCase().includes(searchTermLower)
         );
         const userNameMatch = userName.toLowerCase().includes(searchTermLower);
         const contactMatch = contact?.toLowerCase().includes(searchTermLower);
-        return idMatch || deviceNameMatch || userNameMatch || contactMatch;
+        const paidBy = invoice.paidBy?.toLowerCase() || '';
+        const paidByMatch =
+          paidBy.includes(searchTermLower) ||
+          (paidBy === 'wallet-auto' &&
+            ['wallet', 'auto paid', 'auto-paid', 'wallet auto pay'].some(term =>
+              term.includes(searchTermLower) || searchTermLower.includes(term)
+            ));
+        return idMatch || deviceNameMatch || userNameMatch || contactMatch || paidByMatch;
       });
+    }
+
+    if (accountHolderFilter !== 'all') {
+      filtered = filtered.filter(({ invoice }) =>
+        invoice.customerName === accountHolderFilter
+      );
+    }
+
+    if (paidByFilter !== 'all') {
+      filtered = filtered.filter(({ invoice }) => invoice.paidBy === paidByFilter);
     }
 
     // Status filter
@@ -206,12 +234,20 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
 
     return filtered;
 
-  }, [invoicesWithDetails, searchTerm, dateRange, statusFilter, now]);
+  }, [
+    invoicesWithDetails,
+    searchTerm,
+    dateRange,
+    statusFilter,
+    accountHolderFilter,
+    paidByFilter,
+    now,
+  ]);
 
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, dateRange, statusFilter]);
+  }, [searchTerm, dateRange, statusFilter, accountHolderFilter, paidByFilter]);
 
   // Fetch call statuses from robocall logs
   useEffect(() => {
@@ -263,8 +299,10 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
     }, { paidTotal: 0, pendingTotal: 0 });
   }, [filteredInvoices]);
 
+  // Marking an invoice paid is a critical action — the security PIN is asked first.
   const handleMarkAsPaidClick = (invoice: Invoice) => {
-    handleMarkAsPaid(invoice);
+    setPendingPaidInvoice(invoice);
+    setIsMarkPaidPinOpen(true);
   };
 
   const executeUnpaidReversal = async (invoice: Invoice) => {
@@ -277,7 +315,12 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
             await fetch('/api/traccar/devices/expiry/reverse', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ deviceId, periodEndDate: invoice.periodEnd }),
+              body: JSON.stringify({
+                deviceId,
+                periodEndDate: invoice.periodEnd,
+                // Undo the payment: pull expiry back one billing period.
+                durationType: invoice.durationType === 'yearly' ? 'yearly' : 'monthly',
+              }),
             });
         }
         await addLog(`(Auto-Approved) Reverted invoice #${invoice.id} to Pending`, user.name, 'update');
@@ -365,7 +408,7 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'mark_invoice_unpaid',
+          actionType: 'mark_invoice_unpaid',
           targetId: invoice.id,
           payload,
           requestedBy: { uid: user.email, name: user.name }
@@ -373,10 +416,22 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
       });
       const result = await response.json();
 
-      if (result.status === 'auto_approved') {
+      if (!response.ok) {
+        toast({
+          variant: 'destructive',
+          title: 'Request Failed',
+          description: result.error || 'Could not create the approval request.',
+        });
+        return;
+      }
+
+      if (result.id === 'auto_approved') {
           await executeUnpaidReversal(invoice);
       } else {
-        toast({ title: 'Approval Requested', description: 'This action requires approval.' });
+        toast({
+          title: 'Approval Requested',
+          description: 'Another administrator must approve this on the Approvals page.',
+        });
       }
 
     } else {
@@ -1264,6 +1319,17 @@ export default function InvoiceList({ searchTerm, dateRange, statusFilter = ['al
         onOpenChange={setIsPinForDeleteOpen}
         onSuccess={handleDelete}
         actionDescription={`delete invoice #${selectedInvoice?.id}`}
+      />
+
+      <PinPromptDialog
+        open={isMarkPaidPinOpen}
+        onOpenChange={setIsMarkPaidPinOpen}
+        title="Confirm Invoice Payment"
+        description={`Enter the security PIN to mark invoice #${pendingPaidInvoice?.id ?? ''} as paid.`}
+        onSuccess={() => {
+          if (pendingPaidInvoice) handleMarkAsPaid(pendingPaidInvoice);
+          setPendingPaidInvoice(null);
+        }}
       />
 
       <BillingBreakdownDialog

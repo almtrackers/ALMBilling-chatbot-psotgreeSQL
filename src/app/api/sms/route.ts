@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma/client';
 import { toSmsE164 } from '@/lib/utils';
+import { deliverSmsLocationResponse } from '@/lib/sms-location';
+import { isAdminRequest } from '@/lib/server-auth';
 
 type IncomingSmsPayload = {
   type?: string;
@@ -110,8 +112,16 @@ async function rematchUnknownRows() {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // Reading SMS requires a logged-in Traccar administrator.
+    if (!(await isAdminRequest(req))) {
+      return NextResponse.json(
+        { success: false, message: 'Unauthorized — Traccar admin login required.' },
+        { status: 401 }
+      );
+    }
+
     await rematchUnknownRows();
     const messages = await prisma.smsResponse.findMany({
       orderBy: [{ receivedAt: 'desc' }, { createdAt: 'desc' }],
@@ -155,6 +165,16 @@ export async function POST(req: NextRequest) {
       where: { gatewayId, normalizedFrom, message, receivedAt },
     });
     if (duplicate) {
+      try {
+        await deliverSmsLocationResponse({
+          smsResponseId: duplicate.id,
+          normalizedFrom: duplicate.normalizedFrom,
+          message: duplicate.message,
+          receivedAt: duplicate.receivedAt,
+        });
+      } catch (deliveryError) {
+        console.error('Failed to deliver duplicate SMS location response:', deliveryError);
+      }
       return NextResponse.json({ success: true, duplicate: true, sms: duplicate });
     }
 
@@ -175,6 +195,18 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    try {
+      await deliverSmsLocationResponse({
+        smsResponseId: sms.id,
+        normalizedFrom: sms.normalizedFrom,
+        message: sms.message,
+        receivedAt: sms.receivedAt,
+      });
+    } catch (deliveryError) {
+      // The SMS is safely stored. A duplicate webhook delivery can retry WhatsApp delivery.
+      console.error('Failed to deliver SMS location response:', deliveryError);
+    }
+
     return NextResponse.json({ success: true, sms }, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to save SMS';
@@ -183,8 +215,15 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
   try {
+    if (!(await isAdminRequest(req))) {
+      return NextResponse.json(
+        { success: false, message: 'Unauthorized — Traccar admin login required.' },
+        { status: 401 }
+      );
+    }
+
     const result = await prisma.smsResponse.deleteMany();
     return NextResponse.json({ success: true, deleted: result.count });
   } catch (error: unknown) {

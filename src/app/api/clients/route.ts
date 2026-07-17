@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
     const form = await req.formData();
     const name = String(form.get('name') || '').trim();
     const cnicRaw = String(form.get('cnic') || '').trim();
+    const cnicExpiryRaw = String(form.get('cnicExpiry') || '').trim();
     const email = String(form.get('email') || '').trim() || null;
     const phone = String(form.get('phone') || '').trim() || null;
     const traccarIdRaw = String(form.get('traccarId') || '').trim();
@@ -62,6 +63,28 @@ export async function POST(req: NextRequest) {
     if (!cnic) {
       return NextResponse.json(
         { success: false, message: 'Invalid CNIC. Use 13 digits or format XXXXX-XXXXXXX-X.' },
+        { status: 400 }
+      );
+    }
+
+    if (!cnicExpiryRaw) {
+      return NextResponse.json(
+        { success: false, message: 'CNIC expiry date is required.' },
+        { status: 400 }
+      );
+    }
+    const cnicExpiry = new Date(cnicExpiryRaw);
+    if (isNaN(cnicExpiry.getTime())) {
+      return NextResponse.json(
+        { success: false, message: 'Invalid CNIC expiry date.' },
+        { status: 400 }
+      );
+    }
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    if (cnicExpiry < startOfToday) {
+      return NextResponse.json(
+        { success: false, message: 'This CNIC is expired. Expired ID cards cannot be added.' },
         { status: 400 }
       );
     }
@@ -112,6 +135,7 @@ export async function POST(req: NextRequest) {
           email,
           phone,
           cnic: cnic.formatted,
+          cnicExpiry,
           cnicFrontPath: front.relativePath,
           cnicBackPath: back.relativePath,
         },
@@ -120,6 +144,7 @@ export async function POST(req: NextRequest) {
           email: email ?? undefined,
           phone: phone ?? undefined,
           cnic: cnic.formatted,
+          cnicExpiry,
           cnicFrontPath: front.relativePath,
           cnicBackPath: back.relativePath,
         },
@@ -132,6 +157,7 @@ export async function POST(req: NextRequest) {
           email,
           phone,
           cnic: cnic.formatted,
+          cnicExpiry,
           cnicFrontPath: front.relativePath,
           cnicBackPath: back.relativePath,
         },
@@ -139,6 +165,7 @@ export async function POST(req: NextRequest) {
           name,
           email: email ?? undefined,
           cnic: cnic.formatted,
+          cnicExpiry,
           cnicFrontPath: front.relativePath,
           cnicBackPath: back.relativePath,
         },
@@ -150,6 +177,7 @@ export async function POST(req: NextRequest) {
           email,
           phone,
           cnic: cnic.formatted,
+          cnicExpiry,
           cnicFrontPath: front.relativePath,
           cnicBackPath: back.relativePath,
         },

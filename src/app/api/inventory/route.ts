@@ -25,11 +25,23 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
-    const { imeis, sims, cost, ...rest } = data;
+    // Only persist real InventoryItem columns — the form sends extra UI-only
+    // fields (includeHarness, createdBy, ...) that Prisma would reject.
+    const { imeis, sims, cost, name, type, quantity, supplier } = data;
+
+    if (!name || !type) {
+      return NextResponse.json(
+        { success: false, message: 'name and type are required' },
+        { status: 400 }
+      );
+    }
 
     const inventoryItem = await prisma.inventoryItem.create({
       data: {
-        ...rest,
+        name,
+        type,
+        quantity: Number(quantity) || 0,
+        supplier: supplier || null,
         imeis: imeis ? JSON.stringify(imeis) : null,
         sims: sims ? JSON.stringify(sims) : null,
         cost: cost ? cost : null,

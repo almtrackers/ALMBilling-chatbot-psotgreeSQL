@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { hash } from 'bcryptjs';
 import prisma from '@/lib/prisma/client';
 import { parseJsonField } from '@/lib/db/serialize';
 
 function formatSettings(settings: {
   soundEvents: string | null;
   soundAlarms: string | null;
+  securityPin?: string | null;
   [key: string]: unknown;
 }) {
+  // Never expose the raw PIN to the client — only whether one is set.
+  const { securityPin, ...rest } = settings;
   return {
-    ...settings,
+    ...rest,
+    hasSecurityPin: Boolean(securityPin),
     soundEvents: parseJsonField<string[]>(settings.soundEvents, ['alarm']),
     soundAlarms: parseJsonField<string[]>(settings.soundAlarms, []),
   };
@@ -47,6 +52,14 @@ export async function POST(req: NextRequest) {
       data.soundEvents !== undefined ? JSON.stringify(data.soundEvents) : undefined;
     const soundAlarms =
       data.soundAlarms !== undefined ? JSON.stringify(data.soundAlarms) : undefined;
+    // Only touch the PIN when explicitly sent: non-empty sets it, empty string clears it.
+    // Stored bcrypt-hashed — the raw PIN never touches the database.
+    const securityPin =
+      typeof data.securityPin === 'string'
+        ? data.securityPin.trim() === ''
+          ? null
+          : await hash(data.securityPin.trim(), 12)
+        : undefined;
 
     const settings = await prisma.appSetting.upsert({
       where: { id: 'main' },
@@ -56,6 +69,8 @@ export async function POST(req: NextRequest) {
         invoiceDaysYearly: data.invoiceDaysYearly,
         simCostPerDevice: data.simCostPerDevice,
         monthlyYearlyThreshold: data.monthlyYearlyThreshold,
+        walletAutoPayEnabled: data.walletAutoPayEnabled,
+        securityPin,
         soundEvents,
         soundAlarms,
       },
@@ -66,6 +81,8 @@ export async function POST(req: NextRequest) {
         invoiceDaysYearly: data.invoiceDaysYearly || 7,
         simCostPerDevice: data.simCostPerDevice || 150,
         monthlyYearlyThreshold: data.monthlyYearlyThreshold || 2000,
+        walletAutoPayEnabled: data.walletAutoPayEnabled ?? true,
+        securityPin: securityPin ?? null,
         soundEvents: soundEvents ?? JSON.stringify(['alarm']),
         soundAlarms: soundAlarms ?? JSON.stringify([]),
       },

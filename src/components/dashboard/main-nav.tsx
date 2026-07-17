@@ -32,7 +32,11 @@ import useSWR from 'swr';
 import type { ApprovalRequest } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+};
 
 const allNavItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
@@ -71,7 +75,9 @@ export function MainNav({
   const { isAdmin } = useAuth();
   
   const { data: approvals } = useSWR<ApprovalRequest[]>('/api/approvals', fetcher);
-  const pendingCount = approvals?.filter(app => app.status === 'pending').length || 0;
+  const pendingCount = Array.isArray(approvals)
+    ? approvals.filter(app => app.status === 'pending').length
+    : 0;
 
   const navItems = allNavItems.filter(item => !item.adminOnly || isAdmin);
 

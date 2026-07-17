@@ -10,7 +10,15 @@ type TraccarUser = {
   username?: string;
   administrator?: boolean;
   manager?: boolean;
+  userLimit?: number;
 };
+
+function isStaffUser(user?: TraccarUser | null): boolean {
+  if (!user) return false;
+  const isManager =
+    Boolean(user.manager) || (typeof user.userLimit === 'number' && user.userLimit !== 0);
+  return Boolean(user.administrator) || isManager;
+}
 
 type TraccarDevice = {
   id: number;
@@ -49,12 +57,15 @@ function extractPhoneCandidates(raw?: string | null): string[] {
 
 type RegNumberSource = 'fromUsername' | 'fromUserPhone' | 'fromDeviceRobocall' | 'fromSalesRobocall';
 
-async function ensureDbUser(traccarUser: {
-  id: number;
-  name?: string;
-  email?: string;
-  phone?: string | null;
-}) {
+async function ensureDbUser(
+  traccarUser: {
+    id: number;
+    name?: string;
+    email?: string;
+    phone?: string | null;
+  },
+  isStaff = false
+) {
   const phone = extractPhoneCandidates(traccarUser.phone)[0] || null;
 
   let user = await prisma.user.findUnique({ where: { traccarId: traccarUser.id } });
@@ -83,6 +94,10 @@ async function ensureDbUser(traccarUser: {
       });
     }
   }
+
+  // Admin/manager accounts are never auto-created — their wallets
+  // must be created manually from the Wallets page.
+  if (isStaff) return null;
 
   return prisma.user.create({
     data: {
@@ -137,12 +152,13 @@ export async function syncRegistrationNumbersFromTraccar(): Promise<RegSyncStats
   const dbUserByTraccarId = new Map<number, { id: number }>();
 
   for (const tUser of traccarUsers) {
-    const dbUser = await ensureDbUser(tUser);
+    const dbUser = await ensureDbUser(tUser, isStaffUser(tUser));
+    if (!dbUser) continue;
     dbUserByTraccarId.set(tUser.id, { id: dbUser.id });
     stats.usersSynced += 1;
 
     // Skip staff accounts for registration-number seeding.
-    if (tUser.administrator || tUser.manager) continue;
+    if (isStaffUser(tUser)) continue;
 
     const usernamePhones = extractPhoneCandidates(tUser.username);
     for (const phone of usernamePhones) {
@@ -204,8 +220,10 @@ export async function syncRegistrationNumbersFromTraccar(): Promise<RegSyncStats
         tUser || {
           id: ownerTraccarId,
           name: `Traccar User ${ownerTraccarId}`,
-        }
+        },
+        isStaffUser(tUser)
       );
+      if (!ensured) continue;
       dbUser = { id: ensured.id };
       dbUserByTraccarId.set(ownerTraccarId, dbUser);
     }
@@ -254,8 +272,10 @@ export async function syncRegistrationNumbersFromTraccar(): Promise<RegSyncStats
             tUser || {
               id: ownerTraccarId,
               name: sale.customerName || `Traccar User ${ownerTraccarId}`,
-            }
+            },
+            isStaffUser(tUser)
           );
+          if (!ensured) continue;
           dbUser = { id: ensured.id };
           dbUserByTraccarId.set(ownerTraccarId, dbUser);
         }
@@ -263,13 +283,14 @@ export async function syncRegistrationNumbersFromTraccar(): Promise<RegSyncStats
       } else {
         // Fallback: match Traccar username == phone
         const matchedUser = traccarUsers.find((u) => {
-          if (u.administrator || u.manager) return false;
+          if (isStaffUser(u)) return false;
           return extractPhoneCandidates(u.username).includes(phone) || extractPhoneCandidates(u.phone).includes(phone);
         });
         if (matchedUser) {
           let dbUser = dbUserByTraccarId.get(matchedUser.id);
           if (!dbUser) {
             const ensured = await ensureDbUser(matchedUser);
+            if (!ensured) continue;
             dbUser = { id: ensured.id };
             dbUserByTraccarId.set(matchedUser.id, dbUser);
           }

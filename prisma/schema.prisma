@@ -19,6 +19,7 @@ model User {
   status              String               @default("active")
   pin                 String?
   cnic                String?              @unique
+  cnicExpiry          DateTime?
   cnicFrontPath       String?
   cnicBackPath        String?
   alerts              AlertLog[]
@@ -98,6 +99,24 @@ model SmsResponse {
   @@index([receivedAt])
   @@index([saleId])
   @@map("sms_responses")
+}
+
+model SmsLocationRequest {
+  id            String    @id @default(uuid())
+  phoneNumber   String
+  deviceId      Int
+  deviceName    String
+  simNumber     String
+  status        String    @default("pending")
+  requestedAt   DateTime  @default(now())
+  expiresAt     DateTime
+  completedAt   DateTime?
+  smsResponseId String?
+  locationUrl   String?   @db.Text
+
+  @@index([simNumber, status])
+  @@index([phoneNumber, requestedAt])
+  @@map("sms_location_requests")
 }
 
 model Transaction {
@@ -213,6 +232,7 @@ model UserSession {
   assignedTo       String?
   isAssigned       Boolean  @default(false)
   sessionStatus    String   @default("bot")
+  advisorySentAt   DateTime?
 
   @@map("user_sessions")
 }
@@ -446,6 +466,8 @@ model AppSetting {
   invoiceDaysYearly      Int      @default(7)
   simCostPerDevice       Int      @default(150)
   monthlyYearlyThreshold Int      @default(2000)
+  walletAutoPayEnabled   Boolean  @default(true)
+  securityPin            String?
   soundEvents            String?  @db.Text
   soundAlarms            String?  @db.Text
   createdAt              DateTime @default(now())

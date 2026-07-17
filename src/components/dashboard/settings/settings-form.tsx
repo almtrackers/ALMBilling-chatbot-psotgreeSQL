@@ -16,6 +16,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -41,6 +42,13 @@ const formSchema = z.object({
   invoiceDaysYearly: z.coerce.number().int().min(1, 'Must be at least 1 day.').max(364, 'Must be 364 days or less.'),
   simCostPerDevice: z.coerce.number().min(0, 'SIM cost cannot be negative.'),
   monthlyYearlyThreshold: z.coerce.number().min(0, 'Threshold must be a positive number.'),
+  walletAutoPayEnabled: z.boolean(),
+  securityPin: z
+    .string()
+    .refine((v) => v === '' || /^\d{4,8}$/.test(v), {
+      message: 'PIN must be 4–8 digits.',
+    })
+    .optional(),
 });
 
 export default function SettingsForm() {
@@ -59,6 +67,8 @@ export default function SettingsForm() {
       invoiceDaysYearly: 30,
       simCostPerDevice: 150,
       monthlyYearlyThreshold: 2000,
+      walletAutoPayEnabled: true,
+      securityPin: '',
     },
   });
 
@@ -71,7 +81,7 @@ export default function SettingsForm() {
   
   useEffect(() => {
     if (settings) {
-      reset(settings);
+      reset({ walletAutoPayEnabled: true, ...settings, securityPin: '' });
       if (settings.theme) {
         setTheme(settings.theme);
       }
@@ -86,7 +96,10 @@ export default function SettingsForm() {
     }
     
     try {
-      await localApiClient.post('/app-settings', values);
+      // Leaving the PIN field blank means "keep the current PIN" — don't send it.
+      const { securityPin, ...rest } = values;
+      const payload = securityPin && securityPin.trim() !== '' ? { ...rest, securityPin: securityPin.trim() } : rest;
+      await localApiClient.post('/app-settings', payload);
       setTheme(values.theme);
       mutateSettings();
       
@@ -222,6 +235,49 @@ export default function SettingsForm() {
             )}
             />
         </div>
+
+        <FormField
+          control={control}
+          name="walletAutoPayEnabled"
+          render={({ field }) => (
+            <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <FormLabel>Wallet Auto-Pay</FormLabel>
+                <FormDescription>
+                  When enabled, pending invoices are paid automatically from a customer&apos;s
+                  wallet surplus during wallet sync. Disable to require manual payment.
+                </FormDescription>
+              </div>
+              <FormControl>
+                <Switch checked={field.value} onCheckedChange={field.onChange} />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={control}
+          name="securityPin"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Security PIN {settings?.hasSecurityPin ? '(configured)' : '(not set)'}</FormLabel>
+              <FormControl>
+                <Input
+                  type="password"
+                  inputMode="numeric"
+                  placeholder={settings?.hasSecurityPin ? 'Enter new PIN to change...' : 'Set a 4–8 digit PIN...'}
+                  {...field}
+                  value={field.value ?? ''}
+                />
+              </FormControl>
+              <FormDescription>
+                Required for critical actions: wallet add/remove money, marking invoices paid,
+                and deleting logs. Leave blank to keep the current PIN.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
         <Button type="submit" disabled={isSubmitting || !isDirty}>
             {isSubmitting ? (

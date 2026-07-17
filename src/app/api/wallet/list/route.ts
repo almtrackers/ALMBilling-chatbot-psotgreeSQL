@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma/client';
+import { computeUpcomingCharges } from '@/lib/wallet-upcoming';
 
 export async function GET(req: NextRequest) {
   try {
@@ -14,20 +15,30 @@ export async function GET(req: NextRequest) {
       orderBy: { updatedAt: 'desc' },
     });
 
-    const serializedWallets = wallets.map(wallet => ({
-      ...wallet,
-      balance: wallet.balance.toNumber(),
-      devices: wallet.devices.map(d => ({
+    const serializedWallets = wallets.map(wallet => {
+      const devices = wallet.devices.map(d => ({
         ...d,
         planPrice: d.planPrice.toNumber(),
         dailyCost: d.dailyCost.toNumber(),
-      })),
-      transactions: wallet.transactions.map(t => ({
-        ...t,
-        amount: t.amount.toNumber(),
-        balanceAfter: t.balanceAfter.toNumber(),
-      })),
-    }));
+      }));
+      const balance = wallet.balance.toNumber();
+      const upcoming = computeUpcomingCharges(devices);
+
+      return {
+        ...wallet,
+        balance,
+        devices,
+        upcomingCharges: upcoming.upcomingCharges,
+        nextBillingDate: upcoming.nextBillingDate,
+        upcomingDeviceCount: upcoming.deviceCount,
+        lowBalanceWarning: upcoming.upcomingCharges > 0 && balance < upcoming.upcomingCharges,
+        transactions: wallet.transactions.map(t => ({
+          ...t,
+          amount: t.amount.toNumber(),
+          balanceAfter: t.balanceAfter.toNumber(),
+        })),
+      };
+    });
 
     return NextResponse.json({ success: true, wallets: serializedWallets });
   } catch (error: any) {

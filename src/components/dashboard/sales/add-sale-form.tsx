@@ -485,31 +485,14 @@ export default function AddSaleForm({
       } else {
           toast({
             variant: 'destructive',
-            title: 'Complete user setup first',
-            description:
-              'Create the customer from Users with CNIC and CNIC front/back images, then select them here.',
+            title: 'User not found',
+            description: 'Create the customer from the Users page first, then select them here.',
           });
           setIsSubmitting(false);
           return;
       }
 
-      const clientsRes = await fetch('/api/clients', { credentials: 'include' });
-      const clientsJson = await clientsRes.json().catch(() => ({ clients: [] }));
-      const clientDocs = (clientsJson.clients || []).find(
-        (c: { traccarId?: number | null; name?: string; cnic?: string | null }) =>
-          c.traccarId === userIdToAssign ||
-          (c.name && c.name.toLowerCase() === customerName.toLowerCase())
-      );
-      if (!clientDocs?.cnic || !clientDocs?.cnicFrontPath || !clientDocs?.cnicBackPath) {
-        toast({
-          variant: 'destructive',
-          title: 'Missing CNIC documents',
-          description:
-            'This customer needs CNIC and front/back images on the Users page before adding a vehicle.',
-        });
-        setIsSubmitting(false);
-        return;
-      }
+      // CNIC documents are validated at user creation, so sales skip that check.
 
       const finalContactNumber = values.contactNumberSameAsAlert ? values.phoneRobocall : (normalizePhoneNumber(values.contactNumber || '') || '');
       const threshold = appSettings.monthlyYearlyThreshold || 2000;

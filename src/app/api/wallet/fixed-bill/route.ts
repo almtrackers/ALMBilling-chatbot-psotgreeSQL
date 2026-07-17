@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import axios from 'axios';
+import { getSessionUser } from '@/lib/server-auth';
 
 const TRACCAR_API_URL = process.env.TRACCAR_API_URL || 'https://app.almtrace.com/api';
 const TRACCAR_USER = process.env.TRACCAR_USER;
@@ -64,6 +65,15 @@ export async function POST(req: NextRequest) {
     await prisma.transaction.update({
       where: { id: transaction.id },
       data: { balanceAfter: updatedUser.balance },
+    });
+
+    const sessionUser = await getSessionUser(req);
+    await prisma.log.create({
+      data: {
+        action: `Fixed bill concession for ${device.name} (wallet #${device.userId}, ${device.user.name}): ${hours.toFixed(1)} offline hours → PKR ${concessionAmount.toNumber().toLocaleString()} credited. New balance: PKR ${updatedUser.balance.toNumber().toLocaleString()}.`,
+        adminName: sessionUser?.name || sessionUser?.email || 'Admin',
+        type: 'update',
+      },
     });
 
     if (device.user.traccarId && TRACCAR_USER && TRACCAR_PASS) {

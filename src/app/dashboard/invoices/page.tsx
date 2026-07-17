@@ -152,7 +152,7 @@ export default function InvoicesPage() {
                     <Search className="absolute left-2.5 top-9 h-4 w-4 text-muted-foreground" />
                     <Input
                       type="search"
-                      placeholder="By Customer, Device, or ID..."
+                      placeholder="Customer, device, ID, or wallet auto-pay..."
                       className="pl-8"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
@@ -259,8 +259,11 @@ export default function InvoicesPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All</SelectItem>
-                      {paidByOptions.map((name) => (
-                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      <SelectItem value="wallet-auto">Wallet Auto-Paid</SelectItem>
+                      {paidByOptions.filter((name) => name !== 'wallet-auto').map((name) => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

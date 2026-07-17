@@ -7,6 +7,8 @@ export type AppSettings = {
   invoiceDaysYearly: number;
   simCostPerDevice: number;
   monthlyYearlyThreshold: number;
+  walletAutoPayEnabled?: boolean;
+  hasSecurityPin?: boolean;
   soundEvents?: string[];
   soundAlarms?: string[];
 };
@@ -399,6 +401,10 @@ export type WalletUser = {
   status: 'active' | 'suspended';
   devices?: WalletDevice[];
   transactions?: WalletTransaction[];
+  upcomingCharges?: number;
+  nextBillingDate?: string | Date | null;
+  upcomingDeviceCount?: number;
+  lowBalanceWarning?: boolean;
   createdAt: string | Date;
   updatedAt: string | Date;
 };
@@ -407,7 +413,7 @@ export type WalletTransaction = {
   id: number;
   userId: number;
   deviceId?: number | null;
-  type: 'credit' | 'debit';
+  type: 'credit' | 'debit' | 'auto-pay' | 'transfer';
   amount: number;
   balanceAfter: number;
   description: string;

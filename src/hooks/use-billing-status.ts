@@ -5,7 +5,11 @@ import useSWR from 'swr';
 import { useDevices } from './use-devices';
 import type { Sale, CompanyVehicle, Device, InventoryItem } from '@/lib/types';
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+};
 
 export type UnbilledDevice = Device & {
   isInStock: boolean;
@@ -20,7 +24,12 @@ export function useBillingStatus() {
   const { data: inventory, isLoading: isLoadingInventory, error: errorInventory } = useSWR<InventoryItem[]>('/api/inventory', fetcher);
 
   const unbilledDevices: UnbilledDevice[] = useMemo(() => {
-    if (!devices || !sales || !companyVehicles || !inventory) {
+    if (
+      !devices ||
+      !Array.isArray(sales) ||
+      !Array.isArray(companyVehicles) ||
+      !Array.isArray(inventory)
+    ) {
       return [];
     }
 
