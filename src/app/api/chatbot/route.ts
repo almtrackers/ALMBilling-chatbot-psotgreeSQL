@@ -6,6 +6,12 @@ import { parseISO, format as formatDate, startOfDay, endOfDay, subDays, startOfM
 import fs from 'fs';
 import path from 'path';
 import { sendWhatsAppMessage, sendWhatsAppDocument } from '@/lib/whatsapp';
+import {
+  downloadAndSaveWhatsAppMedia,
+  extractIncomingMedia,
+  mediaBodyLabel,
+  type SavedWhatsAppMedia,
+} from '@/lib/whatsapp-media';
 import { getPhoneLookupVariants, normalizePhoneNumber } from '@/lib/utils';
 import { generateTripReportPdf, type TripReportRow } from '@/lib/chatbot/trip-report-pdf';
 import { generateStopsReportPdf, type StopReportRow } from '@/lib/chatbot/stops-report-pdf';
@@ -352,7 +358,8 @@ async function processWebhookPayload(payload: any) {
 
     let from = '';
     let body = '';
-    let isVoiceMessage = false;
+    let isMediaMessage = false;
+    let incomingMedia: ReturnType<typeof extractIncomingMedia> = null;
     let messageId: string | null = null;
 
     if (payload.object === 'whatsapp_business_account' || payload.field === 'messages' || payload.entry) {
@@ -395,6 +402,8 @@ async function processWebhookPayload(payload: any) {
           const message = messages[0];
           from = message.from || value?.contacts?.[0]?.wa_id || '';
           messageId = message.id || null;
+          incomingMedia = extractIncomingMedia(message);
+          isMediaMessage = Boolean(incomingMedia);
 
           if (message.type === 'text') {
             body = message.text?.body || '';
@@ -409,17 +418,8 @@ async function processWebhookPayload(payload: any) {
             }
           } else if (!message.type && message.text) {
             body = message.text.body || '';
-          } else if (message.type === 'audio' || message.type === 'voice') {
-            isVoiceMessage = true;
-            body = '[voice]';
-          } else if (message.type === 'image') {
-            body = message.image?.caption || '[image]';
-          } else if (message.type === 'video') {
-            body = message.video?.caption || '[video]';
-          } else if (message.type === 'document') {
-            body = message.document?.caption || '[document]';
-          } else if (message.type === 'sticker') {
-            body = '[sticker]';
+          } else if (incomingMedia) {
+            body = mediaBodyLabel(incomingMedia.kind, incomingMedia.caption);
           } else if (message.type === 'location') {
             body = '[location]';
           } else if (message.type === 'contacts') {
@@ -437,7 +437,7 @@ async function processWebhookPayload(payload: any) {
       body = payload.body || '';
     }
 
-    if (!from || (!body && !isVoiceMessage)) {
+    if (!from || (!body && !isMediaMessage)) {
       return;
     }
 
@@ -447,6 +447,31 @@ async function processWebhookPayload(payload: any) {
     const messageBody = body.trim().toLowerCase();
     const stopCommands = ['stop', 'unsubscribe'];
     const subscribeCommands = ['subscribe'];
+
+    // Download and save voice / image / video so live chat can play them.
+    let savedMedia: SavedWhatsAppMedia | null = null;
+    if (incomingMedia) {
+      try {
+        savedMedia = await downloadAndSaveWhatsAppMedia({
+          mediaId: incomingMedia.mediaId,
+          kind: incomingMedia.kind,
+          caption: incomingMedia.caption,
+          phoneNumber,
+        });
+        body = mediaBodyLabel(savedMedia.kind, savedMedia.caption);
+      } catch (mediaError) {
+        console.error('Failed to download WhatsApp media:', mediaError);
+        body = `${mediaBodyLabel(incomingMedia.kind, incomingMedia.caption)}\n(Media download failed — file may expire from WhatsApp soon.)`;
+      }
+    }
+
+    const mediaLogFields = savedMedia
+      ? {
+          mediaType: savedMedia.kind,
+          mediaPath: savedMedia.relativePath,
+          mediaMime: savedMedia.mimeType,
+        }
+      : {};
 
     const existingSession = await prisma.userSession.findFirst({
       where: { phoneNumber: { in: phoneLookupVariants } },
@@ -480,6 +505,7 @@ async function processWebhookPayload(payload: any) {
             body: body,
             payload: JSON.stringify(payload),
             messageId,
+            ...mediaLogFields,
           },
         });
       } catch {
@@ -491,6 +517,7 @@ async function processWebhookPayload(payload: any) {
               from: phoneNumber,
               body: body,
               payload: JSON.stringify(payload),
+              ...mediaLogFields,
             },
             create: {
               type: 'incoming',
@@ -498,6 +525,7 @@ async function processWebhookPayload(payload: any) {
               body: body,
               payload: JSON.stringify(payload),
               messageId,
+              ...mediaLogFields,
             },
           });
           await prisma.webhookLog.delete({ where: { id: dbLogId } });
@@ -514,6 +542,7 @@ async function processWebhookPayload(payload: any) {
             from: phoneNumber,
             body: body,
             payload: JSON.stringify(payload),
+            ...mediaLogFields,
           },
           create: {
             type: 'incoming',
@@ -521,6 +550,7 @@ async function processWebhookPayload(payload: any) {
             body: body,
             payload: JSON.stringify(payload),
             messageId,
+            ...mediaLogFields,
           },
         });
       } catch (updateErr) {
@@ -534,6 +564,7 @@ async function processWebhookPayload(payload: any) {
             from: phoneNumber,
             body: body,
             payload: JSON.stringify(payload),
+            ...mediaLogFields,
           },
         });
       } catch (updateErr) {
@@ -546,16 +577,39 @@ async function processWebhookPayload(payload: any) {
           from: phoneNumber,
           body: body,
           payload: JSON.stringify(payload),
+          ...mediaLogFields,
         },
       });
     }
 
-    if (session.sessionStatus === 'agent') {
+    if (session.sessionStatus === 'agent' || session.isAssigned) {
+      // Media/text is already saved for the live agent inbox.
       return;
     }
 
-    if (isVoiceMessage) {
-      await sendChatbotMessage(phoneNumber, 'Voice messages supported nahi hain. Please text me message bhejein.');
+    // Voice / image / video cannot drive bot menus.
+    if (isMediaMessage) {
+      // Already waiting for a live agent — acknowledge only, never ask again.
+      if (session.lastAction === 'REQUEST_LIVE_AGENT') {
+        await sendChatbotMessage(
+          phoneNumber,
+          '✅ Media receive ho gaya. Aapka live agent request pehle se active hai — agent jald contact karega.'
+        );
+        return;
+      }
+
+      await prisma.userSession.update({
+        where: { phoneNumber },
+        data: {
+          lastAction: 'MEDIA_LIVE_CHAT_OFFER',
+          lastCommand: null,
+          selectedDeviceId: null,
+        },
+      });
+      await sendChatbotMessage(
+        phoneNumber,
+        '✅ Media receive ho gaya (voice / photo / video).\nLive agent se baat karne ke liye *1* reply karein, ya menu commands ke liye text type karein (Type *M*).'
+      );
       return;
     }
 
@@ -597,6 +651,11 @@ async function processWebhookPayload(payload: any) {
       return;
     }
 
+    if (session.lastAction === 'MEDIA_LIVE_CHAT_OFFER' && messageBody === '1') {
+      await requestLiveAgent(phoneNumber);
+      return;
+    }
+
     let registration = await prisma.registrationNumber.findFirst({
       where: { number: { in: phoneLookupVariants } },
       include: { user: true },
@@ -607,6 +666,15 @@ async function processWebhookPayload(payload: any) {
       if (!registration) {
         if (session.lastAction === 'UNREGISTERED_LIVE_CHAT_OFFER' && messageBody === '1') {
           await requestLiveAgent(phoneNumber);
+          return;
+        }
+
+        // Already requested live help — don't keep asking.
+        if (session.lastAction === 'REQUEST_LIVE_AGENT') {
+          await sendChatbotMessage(
+            phoneNumber,
+            '💬 Aapka live chat request pehle se active hai. Kindly wait — agent jald contact karega.'
+          );
           return;
         }
 
@@ -1542,6 +1610,24 @@ async function sendWalletStatementPdf(phoneNumber: string, localUserId: number) 
 }
 
 async function requestLiveAgent(phoneNumber: string, customMessage?: string) {
+  const session = await prisma.userSession.findFirst({
+    where: { phoneNumber },
+    select: { lastAction: true, isAssigned: true, sessionStatus: true },
+  });
+
+  // Do not ask / re-notify if a live request is already open or an agent is assigned.
+  if (
+    session?.lastAction === 'REQUEST_LIVE_AGENT' ||
+    session?.isAssigned ||
+    session?.sessionStatus === 'agent'
+  ) {
+    await sendChatbotMessage(
+      phoneNumber,
+      '💬 Aapka live chat request pehle se active hai. Kindly wait — agent jald contact karega.\n\nType M to return to main menu.'
+    );
+    return;
+  }
+
   await prisma.userSession.update({
     where: { phoneNumber },
     data: {

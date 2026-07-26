@@ -6,6 +6,36 @@ type SendWhatsAppOptions = {
   ignoreOptOut?: boolean;
 };
 
+/** Turn Graph API / axios error payloads into a readable string. */
+export function formatWhatsAppError(error: unknown): string {
+  if (!error) return 'Unknown WhatsApp error';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error && error.message) return error.message;
+
+  const asRecord = error as {
+    error?: { message?: string; error_user_msg?: string; error_data?: { details?: string }; code?: number };
+    message?: string;
+  };
+
+  const nested = asRecord.error;
+  if (nested) {
+    return (
+      nested.error_user_msg ||
+      nested.error_data?.details ||
+      nested.message ||
+      (nested.code ? `WhatsApp error ${nested.code}` : 'WhatsApp API error')
+    );
+  }
+
+  if (typeof asRecord.message === 'string') return asRecord.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'WhatsApp API error';
+  }
+}
+
 export async function sendWhatsAppMessage(to: string, message: string, options?: SendWhatsAppOptions) {
   const normalized = normalizePhoneNumber(to);
   const phoneNumber = normalized.local || normalized.digits || normalized.raw;
@@ -67,7 +97,13 @@ export async function sendWhatsAppMessage(to: string, message: string, options?:
   }
 }
 
-async function logOutgoingMessage(to: string, body: string, status: string, messageId?: string) {
+async function logOutgoingMessage(
+  to: string,
+  body: string,
+  status: string,
+  messageId?: string,
+  media?: { mediaType: string; mediaPath: string; mediaMime: string }
+) {
   try {
     await prisma.webhookLog.create({
       data: {
@@ -77,6 +113,9 @@ async function logOutgoingMessage(to: string, body: string, status: string, mess
         body: body,
         status: status,
         messageId: messageId,
+        mediaType: media?.mediaType,
+        mediaPath: media?.mediaPath,
+        mediaMime: media?.mediaMime,
       },
     });
   } catch (err) {
@@ -195,4 +234,161 @@ export async function sendWhatsAppDocument(
     await logOutgoingMessage(recipientNumber, logBody, 'failed');
     return { success: false, error: err.response?.data || err.message };
   }
+}
+
+export type OutgoingMediaKind = 'image' | 'video' | 'audio' | 'document';
+
+/**
+ * Send image / video / voice / document from an agent to a WhatsApp user.
+ * Also saves a local copy so the live-chat inbox can preview the outgoing media.
+ */
+export async function sendWhatsAppMediaMessage(
+  to: string,
+  inputBuffer: Buffer,
+  options: SendWhatsAppOptions & {
+    kind: OutgoingMediaKind;
+    fileName: string;
+    mimeType: string;
+    caption?: string;
+  }
+) {
+  const { saveOutgoingAgentMedia } = await import('@/lib/whatsapp-media');
+  const normalized = normalizePhoneNumber(to);
+  const phoneNumber = normalized.local || normalized.digits || normalized.raw;
+  const recipientNumber = normalized.international || normalized.digits || normalized.raw;
+  const lookupVariants = getPhoneLookupVariants(to);
+  const shouldIgnoreOptOut = options.ignoreOptOut === true;
+  let kind = options.kind;
+  let mimeType = options.mimeType || 'application/octet-stream';
+  let fileName = options.fileName || `media-${Date.now()}`;
+  let buffer = inputBuffer;
+
+  // Browser mic recordings are usually audio/webm — WhatsApp rejects that entirely.
+  // Convert to OGG/Opus (or MP3) before upload.
+  if (kind === 'audio' && !isWhatsAppNativeAudio(mimeType)) {
+    const { convertAudioForWhatsApp } = await import('@/lib/audio-convert');
+    const converted = await convertAudioForWhatsApp(buffer, mimeType);
+    buffer = converted.buffer;
+    mimeType = converted.mimeType;
+    fileName = converted.fileName;
+  }
+
+  // Prefer a WhatsApp-friendly OGG content-type for Opus voice notes.
+  if (kind === 'audio' && mimeType.toLowerCase().includes('ogg')) {
+    mimeType = 'audio/ogg';
+    if (!fileName.toLowerCase().endsWith('.ogg')) {
+      fileName = `${fileName.replace(/\.[^.]+$/, '')}.ogg`;
+    }
+  }
+
+  const caption = options.caption?.trim() || undefined;
+  const labels: Record<OutgoingMediaKind, string> = {
+    image: '📷 Image',
+    video: '🎬 Video',
+    audio: '🎤 Voice message',
+    document: '📄 Document',
+  };
+  const logBody = caption ? `${labels[kind]}\n${caption}` : labels[kind];
+
+  if (!shouldIgnoreOptOut) {
+    const session = await prisma.userSession.findFirst({
+      where: { phoneNumber: { in: lookupVariants } },
+      select: { lastAction: true },
+    });
+    if (session?.lastAction === 'OPTED_OUT') {
+      await logOutgoingMessage(phoneNumber, logBody, 'skipped-optout');
+      return { success: false, skipped: true, error: 'Recipient opted out' };
+    }
+  }
+
+  const config = getWhatsAppConfig();
+  if (!config) {
+    await logOutgoingMessage(phoneNumber, logBody, 'failed (missing config)');
+    return { success: false, error: 'WhatsApp configuration missing' };
+  }
+
+  let saved: { relativePath: string; mimeType: string; kind: string } | null = null;
+  try {
+    saved = await saveOutgoingAgentMedia({
+      buffer,
+      kind,
+      fileName,
+      mimeType,
+      phoneNumber,
+    });
+
+    const mediaId = await uploadWhatsAppMedia(buffer, fileName, mimeType);
+    const payload =
+      kind === 'image'
+        ? { type: 'image', image: { id: mediaId, ...(caption ? { caption } : {}) } }
+        : kind === 'video'
+          ? { type: 'video', video: { id: mediaId, ...(caption ? { caption } : {}) } }
+          : kind === 'audio'
+            ? { type: 'audio', audio: { id: mediaId } }
+            : {
+                type: 'document',
+                document: {
+                  id: mediaId,
+                  filename: fileName,
+                  ...(caption ? { caption } : {}),
+                },
+              };
+
+    const response = await axios.post(
+      `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipientNumber,
+        ...payload,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${config.token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const messageId = response.data.messages?.[0]?.id;
+    await logOutgoingMessage(recipientNumber, logBody, 'sent', messageId, {
+      mediaType: saved.kind,
+      mediaPath: saved.relativePath,
+      mediaMime: saved.mimeType,
+    });
+    return { success: true, data: response.data };
+  } catch (error: unknown) {
+    const err = error as { response?: { data?: unknown }; message?: string };
+    console.error('Failed to send WhatsApp media:', err.response?.data || err.message);
+    await logOutgoingMessage(
+      recipientNumber,
+      logBody,
+      'failed',
+      undefined,
+      saved
+        ? {
+            mediaType: saved.kind,
+            mediaPath: saved.relativePath,
+            mediaMime: saved.mimeType,
+          }
+        : undefined
+    );
+    return {
+      success: false,
+      error: formatWhatsAppError(err.response?.data || err.message || error),
+    };
+  }
+}
+
+/** WhatsApp Cloud API accepted audio MIME types for type=audio. */
+function isWhatsAppNativeAudio(mimeType: string): boolean {
+  const mime = mimeType.toLowerCase().split(';')[0].trim();
+  return [
+    'audio/aac',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/amr',
+    'audio/ogg',
+    'audio/opus',
+  ].includes(mime);
 }

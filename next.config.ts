@@ -8,6 +8,8 @@ const nextConfig: NextConfig = {
     // This project lives under Downloads/...; a parent package-lock.json was confusing Turbopack.
     root: path.join(__dirname),
   },
+  // Keep native binaries out of the bundler so ffmpeg.exe resolves at runtime.
+  serverExternalPackages: ['ffmpeg-static', '@napi-rs/canvas'],
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -33,7 +35,9 @@ const nextConfig: NextConfig = {
   webpack: (config, context) => {
     if (context.isServer) {
       const existing = config.externals ?? [];
-      config.externals = Array.isArray(existing) ? [...existing, '@napi-rs/canvas'] : existing;
+      config.externals = Array.isArray(existing)
+        ? [...existing, '@napi-rs/canvas', 'ffmpeg-static']
+        : existing;
     }
     return config;
   },

@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { format } from 'date-fns';
-import { MessageSquare, RefreshCw, User, Smartphone, Send, Loader2, Maximize2, Minimize2, ArrowLeft, Edit2, Check, UserPlus, Pencil, Trash2, Database } from 'lucide-react';
+import { MessageSquare, RefreshCw, User, Smartphone, Send, Loader2, Maximize2, Minimize2, ArrowLeft, Edit2, Check, UserPlus, Pencil, Trash2, Database, Paperclip, Mic, Square, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
@@ -22,6 +22,9 @@ interface ChatLog {
   to: string | null;
   body: string;
   status: string | null;
+  mediaType?: string | null;
+  mediaPath?: string | null;
+  mediaMime?: string | null;
   createdAt: string;
 }
 
@@ -95,6 +98,13 @@ export default function ChatLogsPage() {
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
+  const [pendingMedia, setPendingMedia] = useState<File | null>(null);
+  const [pendingPreviewUrl, setPendingPreviewUrl] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [showFullScreenSidebar, setShowFullScreenSidebar] = useState(true);
   const [agentName, setAgentName] = useState('Agent');
@@ -246,42 +256,125 @@ export default function ChatLogsPage() {
     }
   };
 
+  const clearPendingMedia = () => {
+    setPendingMedia(null);
+    if (pendingPreviewUrl) {
+      URL.revokeObjectURL(pendingPreviewUrl);
+      setPendingPreviewUrl(null);
+    }
+  };
+
+  const attachMediaFile = (file: File | null) => {
+    if (!file) return;
+    clearPendingMedia();
+    setPendingMedia(file);
+    if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+      setPendingPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  const stopRecordingTracks = () => {
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+  };
+
+  const toggleVoiceRecording = async () => {
+    if (isRecording && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      const preferredTypes = [
+        'audio/ogg;codecs=opus',
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+      ];
+      const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recordedChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        stopRecordingTracks();
+        const blobType = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(recordedChunksRef.current, { type: blobType });
+        const ext = blobType.includes('ogg') ? 'ogg' : blobType.includes('mp4') ? 'm4a' : 'webm';
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blobType });
+        attachMediaFile(file);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (error: unknown) {
+      toast({
+        variant: 'destructive',
+        title: 'Microphone unavailable',
+        description: error instanceof Error ? error.message : 'Could not start voice recording.',
+      });
+    }
+  };
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedUser || !messageText.trim() || sending) return;
+    if (!selectedUser || sending) return;
+    if (!pendingMedia && !messageText.trim()) return;
 
     setSending(true);
     try {
-      const res = await fetch('/api/chatbot/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: selectedUser,
-          message: messageText.trim(),
-        }),
-      });
+      let res: Response;
+      if (pendingMedia) {
+        const form = new FormData();
+        form.append('to', selectedUser);
+        form.append('file', pendingMedia);
+        if (messageText.trim()) form.append('caption', messageText.trim());
+        res = await fetch('/api/chatbot/send', {
+          method: 'POST',
+          body: form,
+          credentials: 'include',
+        });
+      } else {
+        res = await fetch('/api/chatbot/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            to: selectedUser,
+            message: messageText.trim(),
+          }),
+        });
+      }
 
       const data = await res.json();
-
-      if (res.ok) {
-        setMessageText('');
-        toast({
-          title: "Message Sent",
-          description: "Your message has been queued for delivery.",
-        });
-        // Immediately fetch logs to show the sent message
-        fetchLogs();
-      } else {
-        throw new Error(data.error || 'Failed to send message');
+      if (!res.ok) {
+        const errorText =
+          typeof data.error === 'string'
+            ? data.error
+            : data.error?.message ||
+              data.message ||
+              (data.error ? JSON.stringify(data.error) : 'Failed to send message');
+        throw new Error(errorText);
       }
+
+      setMessageText('');
+      const sentMedia = Boolean(pendingMedia);
+      clearPendingMedia();
+      toast({
+        title: sentMedia ? 'Media Sent' : 'Message Sent',
+        description: 'Your message has been queued for delivery.',
+      });
+      fetchLogs();
     } catch (error: any) {
       console.error('Failed to send message:', error);
       toast({
-        title: "Error",
-        description: error.message || "Failed to send message. Please check your WhatsApp configuration.",
-        variant: "destructive",
+        title: 'Error',
+        description: error.message || 'Failed to send message. Please check your WhatsApp configuration.',
+        variant: 'destructive',
       });
     } finally {
       setSending(false);
@@ -1024,6 +1117,47 @@ export default function ChatLogsPage() {
                               : 'bg-[#dcf8c6] text-slate-800 rounded-tr-none'
                           }`}
                         >
+                          {log.mediaPath && (log.mediaType === 'image' || log.mediaType === 'sticker') && (
+                            <a
+                              href={`/api/chatbot/media?path=${encodeURIComponent(log.mediaPath)}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mb-2 block overflow-hidden rounded-md"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={`/api/chatbot/media?path=${encodeURIComponent(log.mediaPath)}`}
+                                alt={log.body || 'Image'}
+                                className="max-h-64 w-full object-contain bg-black/5"
+                              />
+                            </a>
+                          )}
+                          {log.mediaPath && log.mediaType === 'video' && (
+                            <video
+                              controls
+                              preload="metadata"
+                              className="mb-2 max-h-72 w-full rounded-md bg-black"
+                              src={`/api/chatbot/media?path=${encodeURIComponent(log.mediaPath)}`}
+                            />
+                          )}
+                          {log.mediaPath && log.mediaType === 'audio' && (
+                            <audio
+                              controls
+                              preload="metadata"
+                              className="mb-2 w-full"
+                              src={`/api/chatbot/media?path=${encodeURIComponent(log.mediaPath)}`}
+                            />
+                          )}
+                          {log.mediaPath && log.mediaType === 'document' && (
+                            <a
+                              href={`/api/chatbot/media?path=${encodeURIComponent(log.mediaPath)}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mb-2 inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                            >
+                              Open document
+                            </a>
+                          )}
                           <p className="whitespace-pre-wrap break-words">{log.body}</p>
                           <div className="flex items-center justify-end gap-1 mt-1">
                             <span className="text-[10px] text-muted-foreground/70">
@@ -1043,21 +1177,84 @@ export default function ChatLogsPage() {
 
                 {/* Message Input */}
                 <div className="p-3 bg-white border-t shrink-0">
+                  {pendingMedia && (
+                    <div className="mb-2 flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5 text-xs max-w-4xl mx-auto">
+                      {pendingPreviewUrl && pendingMedia.type.startsWith('image/') ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={pendingPreviewUrl} alt="Preview" className="h-10 w-10 rounded object-cover" />
+                      ) : pendingPreviewUrl && pendingMedia.type.startsWith('video/') ? (
+                        <video src={pendingPreviewUrl} className="h-10 w-14 rounded object-cover" />
+                      ) : pendingPreviewUrl && pendingMedia.type.startsWith('audio/') ? (
+                        <audio src={pendingPreviewUrl} controls className="h-8 max-w-[180px]" />
+                      ) : (
+                        <span className="font-medium">{pendingMedia.name}</span>
+                      )}
+                      <span className="truncate text-muted-foreground">{pendingMedia.name}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="ml-auto h-7 w-7"
+                        onClick={clearPendingMedia}
+                        disabled={sending}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
                   <form
                     onSubmit={handleSendMessage}
                     className="flex items-center gap-2 max-w-4xl mx-auto"
                   >
+                    <input
+                      ref={mediaInputRef}
+                      type="file"
+                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                      className="hidden"
+                      onChange={(event) => {
+                        attachMediaFile(event.target.files?.[0] || null);
+                        event.target.value = '';
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      title="Attach image / video / file"
+                      disabled={sending || isRecording}
+                      onClick={() => mediaInputRef.current?.click()}
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={isRecording ? 'destructive' : 'outline'}
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      title={isRecording ? 'Stop recording' : 'Record voice note'}
+                      disabled={sending}
+                      onClick={toggleVoiceRecording}
+                    >
+                      {isRecording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    </Button>
                     <Input
                       value={messageText}
                       onChange={(e) => setMessageText(e.target.value)}
-                      placeholder="Type a message..."
+                      placeholder={
+                        isRecording
+                          ? 'Recording voice note...'
+                          : pendingMedia
+                            ? 'Optional caption...'
+                            : 'Type a message...'
+                      }
                       className="flex-1 h-9 text-sm"
-                      disabled={sending}
+                      disabled={sending || isRecording}
                     />
                     <Button
                       type="submit"
                       size="sm"
-                      disabled={!messageText.trim() || sending}
+                      disabled={sending || isRecording || (!messageText.trim() && !pendingMedia)}
                       className="shrink-0 h-9 px-3"
                     >
                       {sending ? (

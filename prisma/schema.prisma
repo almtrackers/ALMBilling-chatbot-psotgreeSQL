@@ -247,6 +247,9 @@ model WebhookLog {
   createdAt DateTime @default(now())
   messageId String?  @unique
   status    String?
+  mediaType String?
+  mediaPath String?
+  mediaMime String?
 
   @@map("webhook_logs")
 }
